@@ -1,4 +1,4 @@
-"""Regression tests for authentication and pagination defects.
+"""Regression tests for authentication, pagination and backup defects.
 
 Covers:
 - Email addresses are case-insensitive (login, duplicate registration).
@@ -6,6 +6,8 @@ Covers:
   than crashing bcrypt with "Invalid salt".
 - Activity-log pagination rejects out-of-range pages instead of passing a
   negative skip to MongoDB.
+- Backup settings and the bot test endpoint tolerate null/invalid input
+  instead of raising AttributeError/ValueError as a 500.
 
 Run against a live backend:
     REACT_APP_BACKEND_URL=http://127.0.0.1:8001 pytest backend/tests/test_auth_regressions.py
@@ -148,3 +150,46 @@ class TestActivityLogPagination:
         r = session.get(f"{API}/activity/logs?page=1&limit={limit}", headers=user_headers)
         assert r.status_code == 200, f"limit={limit} -> {r.status_code}: {r.text}"
         assert len(r.json()["logs"]) <= 200
+
+
+class TestBackupSettingsInputHandling:
+    """The admin form sends null for fields the operator left untouched.
+    str.strip()/int() on None raised, surfacing as HTTP 500."""
+
+    @pytest.mark.parametrize("field", ["bot_token", "admin_id"])
+    def test_null_string_field_is_accepted(self, session, admin_headers, field):
+        r = session.put(f"{API}/admin/backup/settings", json={field: None}, headers=admin_headers)
+        assert r.status_code == 200, f"{field}=null -> {r.status_code}: {r.text}"
+
+    @pytest.mark.parametrize("value", [None, "abc", "", []])
+    def test_non_numeric_interval_is_rejected_cleanly(self, session, admin_headers, value):
+        r = session.put(f"{API}/admin/backup/settings",
+                        json={"interval_minutes": value}, headers=admin_headers)
+        assert r.status_code == 400, f"interval={value!r} -> {r.status_code}: {r.text}"
+
+    @pytest.mark.parametrize("value,expected", [(0, 1), (-10, 1), (999999, 10080)])
+    def test_interval_is_clamped(self, session, admin_headers, value, expected):
+        r = session.put(f"{API}/admin/backup/settings",
+                        json={"interval_minutes": value}, headers=admin_headers)
+        assert r.status_code == 200, r.text
+        got = session.get(f"{API}/admin/backup/settings", headers=admin_headers)
+        assert got.json()["interval_minutes"] == expected
+
+    def test_empty_body_is_accepted(self, session, admin_headers):
+        r = session.put(f"{API}/admin/backup/settings", json={}, headers=admin_headers)
+        assert r.status_code == 200, r.text
+
+    @pytest.mark.parametrize("body", [
+        {"bot_token": None, "admin_id": "1"},
+        {"bot_token": "x", "admin_id": None},
+        {},
+    ])
+    def test_test_bot_handles_missing_fields(self, session, admin_headers, body):
+        r = session.post(f"{API}/admin/backup/test-bot", json=body, headers=admin_headers)
+        assert r.status_code == 200, f"{body} -> {r.status_code}: {r.text}"
+        assert r.json()["success"] is False
+
+    def test_backup_settings_requires_admin(self, session):
+        assert session.get(f"{API}/admin/backup/settings").status_code in (401, 403)
+        assert session.post(f"{API}/admin/backup/now").status_code in (401, 403)
+        assert session.post(f"{API}/admin/backup/restore").status_code in (401, 403)

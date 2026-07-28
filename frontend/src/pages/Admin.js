@@ -657,6 +657,9 @@ export default function Admin() {
     try {
       await adminAPI.restoreBackup();
       toast.success(t('admin_backup_restore_success'));
+      // The database was just replaced — everything on screen is stale.
+      fetchUsers(); fetchAllRecords(); fetchPlans(); fetchSettings();
+      fetchAdminLogs(); fetchZones(); fetchBackupSettings();
     } catch (err) { toast.error(err.response?.data?.detail || 'Restore failed'); }
     finally { setBackupRestoreLoading(false); }
   };

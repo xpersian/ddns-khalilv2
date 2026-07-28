@@ -1697,6 +1697,12 @@ async def get_site_config():
 
 backup_task_handle = None
 
+# A bot may upload documents up to 50 MB, but getFile — the only way to pull a
+# backup back down — refuses anything over 20 MB. Backups between the two are
+# accepted and then cannot be restored from the panel, so warn at backup time.
+TELEGRAM_UPLOAD_LIMIT = 49 * 1024 * 1024
+TELEGRAM_DOWNLOAD_LIMIT = 20 * 1024 * 1024
+
 async def do_backup(mongo_url: str, db_name: str, bot_token: str, admin_id: str):
     """Create MongoDB dump and send to Telegram."""
     tmp_dir = tempfile.mkdtemp(prefix="backup_")
@@ -1746,7 +1752,7 @@ async def do_backup(mongo_url: str, db_name: str, bot_token: str, admin_id: str)
 
         # Send to Telegram
         file_size = os.path.getsize(archive_file)
-        if file_size > 49 * 1024 * 1024:
+        if file_size > TELEGRAM_UPLOAD_LIMIT:
             return False, "Backup file too large (>49MB) for Telegram"
 
         caption = f"🗄 Backup: {db_name}\n📅 {timestamp}\n📦 {file_size / 1024:.1f} KB"
@@ -1754,6 +1760,15 @@ async def do_backup(mongo_url: str, db_name: str, bot_token: str, admin_id: str)
             caption += f"\n⚙️ Config: {', '.join(included_config)}"
         else:
             caption += "\n⚙️ Config: none (database only)"
+        if file_size > TELEGRAM_DOWNLOAD_LIMIT:
+            caption += (
+                "\n⚠️ Over 20MB — Telegram will not serve this back to the panel. "
+                "Restore it by downloading the file and using install.sh → Import."
+            )
+            logger.warning(
+                f"Backup is {file_size / 1024 / 1024:.1f}MB, above Telegram's 20MB download "
+                "limit — one-click restore will not work for this file"
+            )
         async with httpx.AsyncClient(timeout=120.0) as client_http:
             with open(archive_file, "rb") as f:
                 resp = await client_http.post(
@@ -1801,14 +1816,24 @@ async def backup_scheduler():
                 await asyncio.sleep(60)
                 continue
 
-            # Check last backup time
-            last = await db.backup_logs.find_one({"status": "success"}, {"_id": 0}, sort=[("timestamp", -1)])
+            # Wait out the interval since the last ATTEMPT, not the last success.
+            # Keying off successes alone means a misconfigured token re-runs
+            # mongodump every 60s forever and grows backup_logs without bound.
+            last = await db.backup_logs.find_one(
+                {"status": {"$in": ["success", "failed"]}}, {"_id": 0}, sort=[("timestamp", -1)]
+            )
             if last:
-                last_time = datetime.fromisoformat(last["timestamp"])
-                elapsed = (datetime.now(timezone.utc) - last_time).total_seconds() / 60
-                if elapsed < interval_minutes:
-                    await asyncio.sleep(60)
-                    continue
+                try:
+                    last_time = datetime.fromisoformat(last["timestamp"])
+                except (TypeError, ValueError):
+                    last_time = None
+                if last_time:
+                    elapsed = (datetime.now(timezone.utc) - last_time).total_seconds() / 60
+                    # Retry a failure sooner than a full interval, but never hot-loop.
+                    wait_minutes = interval_minutes if last.get("status") == "success" else min(interval_minutes, 15)
+                    if elapsed < wait_minutes:
+                        await asyncio.sleep(60)
+                        continue
 
             mongo_url = os.environ.get("MONGO_URL", "mongodb://localhost:27017")
             db_name_env = os.environ.get("DB_NAME", "khalilv2_dns")
@@ -1861,12 +1886,22 @@ async def update_backup_settings(body: dict, admin: dict = Depends(get_admin_use
     update_fields = {}
     if "enabled" in body:
         update_fields["enabled"] = bool(body["enabled"])
-    if "bot_token" in body and body["bot_token"].strip():
-        update_fields["bot_token"] = body["bot_token"].strip()
+    # Every field below tolerates null — the admin form sends null for inputs
+    # the operator left untouched, and .strip()/int() on None raises.
+    if "bot_token" in body:
+        token = str(body.get("bot_token") or "").strip()
+        if token:
+            update_fields["bot_token"] = token
     if "admin_id" in body:
-        update_fields["admin_id"] = str(body["admin_id"]).strip()
+        update_fields["admin_id"] = str(body.get("admin_id") or "").strip()
     if "interval_minutes" in body:
-        val = int(body["interval_minutes"])
+        try:
+            val = int(body["interval_minutes"])
+        except (TypeError, ValueError):
+            raise HTTPException(
+                status_code=400,
+                detail="interval_minutes must be a whole number of minutes",
+            )
         update_fields["interval_minutes"] = max(1, min(val, 10080))  # 1 min to 7 days
 
     await db.settings.update_one(
@@ -1919,17 +1954,36 @@ async def restore_backup(admin: dict = Depends(get_admin_user)):
             )
             file_data = file_resp.json()
             if not file_data.get("ok"):
-                raise HTTPException(status_code=500, detail="Failed to get file from Telegram: " + file_data.get("description", ""))
+                desc = file_data.get("description", "")
+                if "too big" in desc.lower():
+                    raise HTTPException(
+                        status_code=400,
+                        detail="This backup is larger than Telegram's 20MB download limit, so it "
+                               "cannot be restored from the panel. Download the file from the "
+                               "backup chat and restore it with install.sh → Import.",
+                    )
+                raise HTTPException(status_code=500, detail="Failed to get file from Telegram: " + desc)
 
             file_path = file_data["result"]["file_path"]
             dl_resp = await client_http.get(f"https://api.telegram.org/file/bot{bot_token}/{file_path}")
+            if dl_resp.status_code != 200 or not dl_resp.content:
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"Could not download the backup from Telegram (HTTP {dl_resp.status_code}).",
+                )
 
             archive_path = os.path.join(tmp_dir, "backup.tar.gz")
             with open(archive_path, "wb") as f:
                 f.write(dl_resp.content)
 
         # Extract
-        shutil.unpack_archive(archive_path, tmp_dir)
+        try:
+            shutil.unpack_archive(archive_path, tmp_dir)
+        except (shutil.ReadError, OSError) as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"The downloaded backup is not a readable archive: {e}",
+            )
 
         # Find the dump directory
         db_name_env = os.environ.get("DB_NAME", "khalilv2_dns")
@@ -1943,8 +1997,9 @@ async def restore_backup(admin: dict = Depends(get_admin_user)):
         if not os.path.isdir(dump_path):
             raise HTTPException(status_code=400, detail=f"Backup does not contain database '{db_name_env}'")
 
-        # Save backup logs and settings before restore (they'll be dropped)
-        saved_logs = await db.backup_logs.find({}, {"_id": 0}).to_list(100)
+        # Save backup logs and settings before restore (they'll be dropped).
+        # to_list(None) — a cap here would silently discard older history.
+        saved_logs = await db.backup_logs.find({}, {"_id": 0}).to_list(None)
         saved_backup_settings = await db.settings.find_one({"key": "backup_settings"}, {"_id": 0})
 
         # mongorestore
@@ -1954,7 +2009,10 @@ async def restore_backup(admin: dict = Depends(get_admin_user)):
         if result.returncode != 0:
             raise HTTPException(status_code=500, detail=f"mongorestore failed: {result.stderr[:200]}")
 
-        # Re-insert backup logs and settings
+        # Re-insert backup logs and settings. Clear first: mongorestore only
+        # drops collections present in the dump, so re-inserting on top of a
+        # surviving collection duplicates every entry.
+        await db.backup_logs.delete_many({})
         if saved_logs:
             await db.backup_logs.insert_many(saved_logs)
         if saved_backup_settings:
@@ -1977,8 +2035,8 @@ async def restore_backup(admin: dict = Depends(get_admin_user)):
 @api_router.post("/admin/backup/test-bot")
 async def test_backup_bot(body: dict, admin: dict = Depends(get_admin_user)):
     """Test backup bot token and admin ID by sending a test message."""
-    bot_token = body.get("bot_token", "").strip()
-    admin_id = body.get("admin_id", "").strip()
+    bot_token = str(body.get("bot_token") or "").strip()
+    admin_id = str(body.get("admin_id") or "").strip()
     # If no token provided, use stored
     if not bot_token:
         settings = await db.settings.find_one({"key": "backup_settings"}, {"_id": 0})
