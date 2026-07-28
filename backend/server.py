@@ -142,7 +142,9 @@ class SettingsUpdate(BaseModel):
     telegram_url: Optional[str] = None
     contact_message_en: Optional[str] = None
     contact_message_fa: Optional[str] = None
-    referral_bonus_per_invite: Optional[int] = None
+    # Must not go negative: the bonus is applied with $inc to the referrer's
+    # record_limit, and a limit at or below 0 reads as "unlimited".
+    referral_bonus_per_invite: Optional[int] = Field(default=None, ge=0, le=1000)
 
 class ChangeMyPassword(BaseModel):
     current_password: str = Field(min_length=1)
@@ -235,8 +237,10 @@ async def is_email_verification_enabled():
     if not SMTP_EMAIL or not SMTP_PASSWORD:
         return False
     settings = await db.settings.find_one({"key": "site_settings"}, {"_id": 0})
-    if settings and settings.get("email_verification_enabled") is False:
-        return False
+    if settings and "email_verification_enabled" in settings:
+        # Truthiness, not `is False` — an identity check treats any non-bool
+        # stored value (0, "", "false") as "not disabled" and silently re-enables.
+        return bool(settings["email_verification_enabled"])
     # Default: enabled if SMTP is configured
     return True
 
@@ -257,6 +261,23 @@ async def log_activity(user_id: str, user_email: str, action: str, details: str 
         await db.activity_logs.insert_one(log_doc)
     except Exception as e:
         logger.warning(f"Failed to log activity: {e}")
+
+def _record_limit_reached(record_limit, record_count: int) -> bool:
+    """Whether a user is at their record cap.
+
+    0 is the documented "unlimited" sentinel (admins carry it). A negative
+    limit is corrupt data — historically produced by a negative referral
+    bonus — and must not fall through as unlimited, so it denies instead."""
+    try:
+        limit = int(record_limit)
+    except (TypeError, ValueError):
+        return True
+    if limit == 0:
+        return False
+    if limit < 0:
+        return True
+    return record_count >= limit
+
 
 async def _resolve_plan_record_limit(plan_id: str) -> int:
     """Look up record limit for a plan_id. Falls back to PLAN_LIMITS cache.
@@ -1102,7 +1123,7 @@ async def import_records_csv(body: dict, current_user: dict = Depends(get_curren
             if zone_id not in enabled_ids:
                 raise ValueError("Zone is disabled or not configured")
             # Limit check
-            if limit > 0 and current_count >= limit:
+            if _record_limit_reached(limit, current_count):
                 raise ValueError(f"Record limit reached ({limit})")
             # TTL parse
             try:
@@ -1181,7 +1202,7 @@ async def create_record(record_data: DNSRecordCreate, current_user: dict = Depen
     
     # Check plan limits (0 means unlimited)
     record_count = await db.dns_records.count_documents({"user_id": current_user["id"]})
-    if current_user["record_limit"] > 0 and record_count >= current_user["record_limit"]:
+    if _record_limit_reached(current_user.get("record_limit", 0), record_count):
         raise HTTPException(
             status_code=403,
             detail=f"Record limit reached ({current_user['record_limit']}). Upgrade your plan for more records."
@@ -1526,7 +1547,7 @@ async def admin_import_records_csv(body: dict, admin: dict = Depends(get_admin_u
             if uid not in count_cache:
                 count_cache[uid] = await db.dns_records.count_documents({"user_id": uid})
             limit = user.get("record_limit", 0) or 0
-            if limit > 0 and count_cache[uid] >= limit:
+            if _record_limit_reached(limit, count_cache[uid]):
                 raise ValueError(f"Record limit reached for {email} ({limit})")
             try:
                 ttl = int(row["ttl"])
@@ -2084,7 +2105,7 @@ async def admin_get_cf_token(admin: dict = Depends(get_admin_user)):
 async def admin_update_cf_token(body: dict, admin: dict = Depends(get_admin_user)):
     """Update the primary Cloudflare API token."""
     global CF_API_TOKEN
-    new_token = body.get("api_token", "").strip()
+    new_token = str(body.get("api_token") or "").strip()
     if not new_token:
         raise HTTPException(status_code=400, detail="API token cannot be empty")
     CF_API_TOKEN = new_token
@@ -2181,7 +2202,7 @@ async def admin_bot_status(admin: dict = Depends(get_admin_user)):
 async def admin_update_bot_token(body: dict, admin: dict = Depends(get_admin_user)):
     """Update bot token, save to .env, and restart bot."""
     global TELEGRAM_BOT_TOKEN
-    new_token = body.get("token", "").strip()
+    new_token = str(body.get("token") or "").strip()
     # Validate token format (roughly)
     if new_token and ":" not in new_token:
         raise HTTPException(status_code=400, detail="Invalid token format. Should be like 123456:ABC-DEF...")
@@ -2202,7 +2223,7 @@ async def admin_update_bot_token(body: dict, admin: dict = Depends(get_admin_use
 async def admin_update_bot_admin_id(body: dict, admin: dict = Depends(get_admin_user)):
     """Update Telegram admin ID."""
     global TELEGRAM_ADMIN_ID
-    new_id = str(body.get("admin_id", "")).strip()
+    new_id = str(body.get("admin_id") or "").strip()
     TELEGRAM_ADMIN_ID = new_id
     os.environ["TELEGRAM_ADMIN_ID"] = new_id
     _update_env_file("TELEGRAM_ADMIN_ID", new_id)
@@ -2224,8 +2245,8 @@ async def admin_smtp_status(admin: dict = Depends(get_admin_user)):
 async def admin_update_smtp(body: dict, admin: dict = Depends(get_admin_user)):
     """Update SMTP credentials."""
     global SMTP_EMAIL, SMTP_PASSWORD
-    new_email = body.get("smtp_email", "").strip()
-    new_password = body.get("smtp_password", "").strip()
+    new_email = str(body.get("smtp_email") or "").strip()
+    new_password = str(body.get("smtp_password") or "").strip()
     if new_email:
         SMTP_EMAIL = new_email
         os.environ["SMTP_EMAIL"] = new_email
@@ -2239,7 +2260,9 @@ async def admin_update_smtp(body: dict, admin: dict = Depends(get_admin_user)):
 @api_router.put("/admin/smtp/toggle-verification")
 async def admin_toggle_verification(body: dict, admin: dict = Depends(get_admin_user)):
     """Toggle email verification on/off."""
-    enabled = body.get("enabled", False)
+    # Coerce: a raw non-bool lands in the DB and is_email_verification_enabled()
+    # compares with `is False`, so e.g. the string "false" would read as enabled.
+    enabled = bool(body.get("enabled", False))
     await db.settings.update_one(
         {"key": "site_settings"},
         {"$set": {"email_verification_enabled": enabled}},
@@ -2375,8 +2398,8 @@ async def admin_list_zones(admin: dict = Depends(get_admin_user)):
 @api_router.post("/admin/zones")
 async def admin_add_zone(body: dict, admin: dict = Depends(get_admin_user)):
     """Add a new Cloudflare zone. Validates with CF API."""
-    zone_id = body.get("zone_id", "").strip()
-    api_token = body.get("api_token", "").strip() or CF_API_TOKEN
+    zone_id = str(body.get("zone_id") or "").strip()
+    api_token = str(body.get("api_token") or "").strip() or CF_API_TOKEN
     if not zone_id:
         raise HTTPException(status_code=400, detail="Zone ID is required")
     if not api_token:
@@ -3265,7 +3288,7 @@ async def start_telegram_bot():
                 await query.edit_message_text(t(lang, "add_types_disabled"), reply_markup=back_menu_kb(lang))
                 return
             record_count = await db.dns_records.count_documents({"user_id": user["id"]})
-            if user["record_limit"] > 0 and record_count >= user["record_limit"]:
+            if _record_limit_reached(user.get("record_limit", 0), record_count):
                 await query.edit_message_text(
                     t(lang, "add_limit_reached", limit=user['record_limit']),
                     reply_markup=back_menu_kb(lang))

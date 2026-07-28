@@ -193,3 +193,98 @@ class TestBackupSettingsInputHandling:
         assert session.get(f"{API}/admin/backup/settings").status_code in (401, 403)
         assert session.post(f"{API}/admin/backup/now").status_code in (401, 403)
         assert session.post(f"{API}/admin/backup/restore").status_code in (401, 403)
+
+
+class TestAdminSettingsInputHandling:
+    """Every settings endpoint took body.get("x", "").strip(), which raises
+    AttributeError on an explicit null and surfaced as HTTP 500."""
+
+    @pytest.mark.parametrize("path,body", [
+        ("/admin/bot/token", {"token": None}),
+        ("/admin/bot/admin-id", {"admin_id": None}),
+        ("/admin/smtp/config", {"smtp_email": None, "smtp_password": None}),
+        ("/admin/cf-token", {"api_token": None}),
+        ("/admin/google-oauth", {"client_id": None}),
+    ])
+    def test_null_field_does_not_crash(self, session, admin_headers, path, body):
+        r = session.put(f"{API}{path}", json=body, headers=admin_headers)
+        assert r.status_code < 500, f"{path} {body} -> {r.status_code}: {r.text}"
+
+    def test_add_zone_null_does_not_crash(self, session, admin_headers):
+        r = session.post(f"{API}/admin/zones", json={"zone_id": None}, headers=admin_headers)
+        assert r.status_code < 500, f"-> {r.status_code}: {r.text}"
+
+
+class TestReferralBonusValidation:
+    """referral_bonus_per_invite is applied with $inc to the referrer's
+    record_limit, and create_record treats a limit <= 0 as unlimited, so a
+    negative bonus handed out unlimited records."""
+
+    @pytest.mark.parametrize("value", [-1, -5, -1000])
+    def test_negative_bonus_is_rejected(self, session, admin_headers, value):
+        r = session.put(f"{API}/admin/settings",
+                        json={"referral_bonus_per_invite": value}, headers=admin_headers)
+        assert r.status_code == 422, f"bonus={value} accepted: {r.status_code} {r.text}"
+
+    def test_absurdly_large_bonus_is_rejected(self, session, admin_headers):
+        r = session.put(f"{API}/admin/settings",
+                        json={"referral_bonus_per_invite": 10 ** 9}, headers=admin_headers)
+        assert r.status_code == 422, f"-> {r.status_code}: {r.text}"
+
+    @pytest.mark.parametrize("value", [0, 1, 25])
+    def test_valid_bonus_is_accepted(self, session, admin_headers, value):
+        r = session.put(f"{API}/admin/settings",
+                        json={"referral_bonus_per_invite": value}, headers=admin_headers)
+        assert r.status_code == 200, f"bonus={value} rejected: {r.status_code} {r.text}"
+
+    def test_referral_never_drives_limit_to_unlimited(self, session, admin_headers):
+        """End to end: a referral must raise the referrer's limit, never sink it
+        to <= 0 (which create_record reads as unlimited)."""
+        session.put(f"{API}/admin/settings",
+                    json={"referral_bonus_per_invite": 1}, headers=admin_headers)
+        stamp = int(time.time() * 1000)
+        ref = session.post(f"{API}/auth/register", json={
+            "email": f"refbonus{stamp}@gmail.com", "password": PASSWORD, "name": "Referrer"})
+        assert ref.status_code in (200, 201), ref.text
+        code = ref.json()["user"]["referral_code"]
+        before = ref.json()["user"]["record_limit"]
+
+        child = session.post(f"{API}/auth/register", json={
+            "email": f"refchild{stamp}@gmail.com", "password": PASSWORD,
+            "name": "Child", "referral_code": code})
+        assert child.status_code in (200, 201), child.text
+
+        me = session.get(f"{API}/auth/me", headers={
+            "Authorization": f"Bearer {ref.json()['token']}"})
+        after = me.json()["record_limit"]
+        assert after > before, f"referral did not increase limit: {before} -> {after}"
+        assert after > 0, f"limit fell to {after}, which reads as unlimited"
+
+
+class TestEmailVerificationToggle:
+    """The toggle stored the raw body value and the read path compared with
+    `is False`, so a falsy non-bool (0, "") silently kept verification on."""
+
+    @pytest.fixture
+    def smtp_configured(self, session, admin_headers):
+        session.put(f"{API}/admin/smtp/config", headers=admin_headers,
+                    json={"smtp_email": "probe@gmail.com", "smtp_password": "app-password"})
+        yield
+        session.put(f"{API}/admin/smtp/toggle-verification",
+                    json={"enabled": True}, headers=admin_headers)
+
+    @pytest.mark.parametrize("falsy", [False, 0])
+    def test_falsy_toggle_actually_disables(self, session, admin_headers, smtp_configured, falsy):
+        r = session.put(f"{API}/admin/smtp/toggle-verification",
+                        json={"enabled": falsy}, headers=admin_headers)
+        assert r.status_code == 200, r.text
+        assert r.json()["email_verification_enabled"] is False, \
+            f"endpoint echoed {r.json()['email_verification_enabled']!r} for {falsy!r}"
+        pub = session.get(f"{API}/auth/verification-status")
+        assert pub.json()["email_verification_enabled"] is False, \
+            f"admin disabled verification but the public flag still says enabled"
+
+    def test_stored_value_is_a_real_bool(self, session, admin_headers, smtp_configured):
+        r = session.put(f"{API}/admin/smtp/toggle-verification",
+                        json={"enabled": 1}, headers=admin_headers)
+        assert isinstance(r.json()["email_verification_enabled"], bool)
