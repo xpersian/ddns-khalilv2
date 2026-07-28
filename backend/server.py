@@ -154,11 +154,27 @@ def generate_referral_code(length=8):
     chars = string.ascii_lowercase + string.digits
     return ''.join(random.choices(chars, k=length))
 
+def normalize_email(email: str) -> str:
+    """Canonical form for storing and looking up an email address.
+    Addresses are case-insensitive in practice, so we keep exactly one
+    spelling in the database and normalize every lookup through here."""
+    return (email or "").strip().lower()
+
 def hash_password(password: str) -> str:
     return bcrypt.hashpw(password.encode('utf-8'), bcrypt.gensalt()).decode('utf-8')
 
 def verify_password(password: str, hashed: str) -> bool:
-    return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+    """Check a password against a bcrypt hash.
+
+    Returns False instead of raising when the stored hash is empty or
+    malformed — OAuth-only accounts carry an empty password_hash, and
+    bcrypt raises ValueError('Invalid salt') on those."""
+    if not password or not hashed:
+        return False
+    try:
+        return bcrypt.checkpw(password.encode('utf-8'), hashed.encode('utf-8'))
+    except (ValueError, TypeError):
+        return False
 
 def create_token(user_id: str, email: str) -> str:
     payload = {
@@ -404,11 +420,15 @@ async def register(user_data: UserRegister):
             status_code=403,
             detail="Email registration is currently disabled. Please sign up with Google.",
         )
+    # Normalize before any lookup or storage so that Foo@Gmail.com and
+    # foo@gmail.com are the same account everywhere.
+    email = normalize_email(user_data.email)
+
     # Only allow Gmail addresses
-    if not user_data.email.lower().endswith("@gmail.com"):
+    if not email.endswith("@gmail.com"):
         raise HTTPException(status_code=400, detail="Only Gmail addresses (@gmail.com) are allowed for registration.")
-    
-    existing = await db.users.find_one({"email": user_data.email}, {"_id": 0})
+
+    existing = await db.users.find_one({"email": email}, {"_id": 0})
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
     
@@ -423,7 +443,7 @@ async def register(user_data: UserRegister):
     user_id = str(uuid.uuid4())
     user_doc = {
         "id": user_id,
-        "email": user_data.email,
+        "email": email,
         "name": user_data.name,
         "password_hash": hash_password(user_data.password),
         "plan": "free",
@@ -458,7 +478,7 @@ async def register(user_data: UserRegister):
                     }
                 }
             )
-            logger.info(f"Referral: {referrer['email']} gets +{bonus} records from {user_data.email}")
+            logger.info(f"Referral: {referrer['email']} gets +{bonus} records from {email}")
     
     await db.users.insert_one(user_doc)
     
@@ -468,27 +488,27 @@ async def register(user_data: UserRegister):
         user_doc["email_verified"] = False
         await db.users.update_one({"id": user_id}, {"$set": {"email_verified": False}})
         code = generate_verification_code()
-        await db.verification_codes.delete_many({"email": user_data.email})
+        await db.verification_codes.delete_many({"email": email})
         await db.verification_codes.insert_one({
-            "email": user_data.email,
+            "email": email,
             "code": code,
             "user_id": user_id,
             "created_at": datetime.now(timezone.utc).isoformat(),
             "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=10)).isoformat()
         })
-        await send_verification_email(user_data.email, code)
+        await send_verification_email(email, code)
     else:
         user_doc["email_verified"] = True
         await db.users.update_one({"id": user_id}, {"$set": {"email_verified": True}})
 
-    token = create_token(user_id, user_data.email)
-    await log_activity(user_id, user_data.email, "register", "New account created")
+    token = create_token(user_id, email)
+    await log_activity(user_id, email, "register", "New account created")
     
     # Notify admin via Telegram bot
     try:
         if telegram_bot_app and telegram_bot_app.running and TELEGRAM_ADMIN_ID:
             import asyncio
-            asyncio.create_task(_notify_admin_web_register(user_data.name, user_data.email))
+            asyncio.create_task(_notify_admin_web_register(user_data.name, email))
     except Exception:
         pass
     
@@ -497,7 +517,7 @@ async def register(user_data: UserRegister):
         "email_verification_required": verify_enabled,
         "user": {
             "id": user_id,
-            "email": user_data.email,
+            "email": email,
             "name": user_data.name,
             "plan": "free",
             "role": "user",
@@ -514,7 +534,7 @@ async def register(user_data: UserRegister):
 @api_router.post("/auth/verify-email")
 async def verify_email(body: dict):
     """Verify email with 6-digit code."""
-    email = body.get("email", "").strip().lower()
+    email = normalize_email(body.get("email", ""))
     code = body.get("code", "").strip()
     if not email or not code:
         raise HTTPException(status_code=400, detail="Email and code are required")
@@ -540,7 +560,7 @@ async def verify_email(body: dict):
 @api_router.post("/auth/resend-code")
 async def resend_verification_code(body: dict):
     """Resend verification code to email."""
-    email = body.get("email", "").strip().lower()
+    email = normalize_email(body.get("email", ""))
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
     
@@ -617,7 +637,7 @@ async def forgot_password(body: dict):
             status_code=503,
             detail="Password reset is currently unavailable — SMTP is not configured.",
         )
-    email = (body.get("email") or "").strip().lower()
+    email = normalize_email(body.get("email"))
     if not email:
         raise HTTPException(status_code=400, detail="Email is required")
     user = await db.users.find_one({"email": email}, {"_id": 0})
@@ -642,7 +662,7 @@ async def reset_password(body: dict):
     has_smtp = bool(SMTP_EMAIL and SMTP_PASSWORD)
     if not has_smtp:
         raise HTTPException(status_code=503, detail="Password reset is currently unavailable.")
-    email = (body.get("email") or "").strip().lower()
+    email = normalize_email(body.get("email"))
     code = (body.get("code") or "").strip()
     new_password = body.get("new_password") or ""
     if not email or not code or not new_password:
@@ -669,8 +689,8 @@ async def reset_password(body: dict):
 
 @api_router.post("/auth/login")
 async def login(user_data: UserLogin):
-    user = await db.users.find_one({"email": user_data.email}, {"_id": 0})
-    if not user or not verify_password(user_data.password, user["password_hash"]):
+    user = await db.users.find_one({"email": normalize_email(user_data.email)}, {"_id": 0})
+    if not user or not verify_password(user_data.password, user.get("password_hash", "")):
         raise HTTPException(status_code=401, detail="Invalid email or password")
     
     token = create_token(user["id"], user["email"])
@@ -768,7 +788,7 @@ async def google_login(payload: GoogleLoginPayload):
         logger.error(f"Google ID token verification unexpected error: {type(e).__name__}: {e}", exc_info=True)
         raise HTTPException(status_code=401, detail=f"Google token error: {type(e).__name__}: {str(e)[:300]}")
 
-    email = (idinfo.get("email") or "").lower().strip()
+    email = normalize_email(idinfo.get("email"))
     if not email:
         raise HTTPException(status_code=400, detail="Email not present in Google account")
     if not idinfo.get("email_verified", False):
@@ -906,6 +926,11 @@ async def get_referral_stats(current_user: dict = Depends(get_current_user)):
 @api_router.put("/auth/password")
 async def change_my_password(pw_data: ChangeMyPassword, current_user: dict = Depends(get_current_user)):
     """Allow any user to change their own password."""
+    if not current_user.get("password_hash"):
+        raise HTTPException(
+            status_code=400,
+            detail="This account has no password yet. Use the set-initial-password flow instead.",
+        )
     if not verify_password(pw_data.current_password, current_user["password_hash"]):
         raise HTTPException(status_code=400, detail="Current password is incorrect")
     await db.users.update_one(
@@ -1456,7 +1481,7 @@ async def admin_import_records_csv(body: dict, admin: dict = Depends(get_admin_u
     for i, row in enumerate(reader, start=2):
         rows.append({
             "line": i,
-            "user_email": (row.get("user_email") or "").strip().lower(),
+            "user_email": normalize_email(row.get("user_email")),
             "name": (row.get("name") or "").strip(),
             "record_type": (row.get("record_type") or "").strip().upper(),
             "content": (row.get("content") or "").strip(),
@@ -2480,8 +2505,17 @@ DEFAULT_PLANS = [
 
 # ============== ACTIVITY LOG ROUTES ==============
 
+MAX_LOG_PAGE_SIZE = 200
+
+def _clamp_pagination(page: int, limit: int) -> tuple:
+    """Keep page/limit in a range Mongo accepts — a page below 1 produces a
+    negative skip, which pymongo rejects with ValueError."""
+    return max(1, page), max(1, min(limit, MAX_LOG_PAGE_SIZE))
+
+
 @api_router.get("/activity/logs")
 async def get_user_activity_logs(page: int = 1, limit: int = 20, current_user: dict = Depends(get_current_user)):
+    page, limit = _clamp_pagination(page, limit)
     skip = (page - 1) * limit
     total = await db.activity_logs.count_documents({"user_id": current_user["id"]})
     logs = await db.activity_logs.find(
@@ -2491,6 +2525,7 @@ async def get_user_activity_logs(page: int = 1, limit: int = 20, current_user: d
 
 @api_router.get("/admin/activity/logs")
 async def admin_get_activity_logs(page: int = 1, limit: int = 50, user_id: Optional[str] = None, action: Optional[str] = None, admin: dict = Depends(get_admin_user)):
+    page, limit = _clamp_pagination(page, limit)
     query = {}
     if user_id:
         query["user_id"] = user_id
@@ -3852,7 +3887,7 @@ async def start_telegram_bot():
         # ── Login Flow ──
         login_step = context.user_data.get("login_step")
         if login_step == "email":
-            context.user_data["login_email"] = text
+            context.user_data["login_email"] = normalize_email(text)
             context.user_data["login_step"] = "password"
             kb = InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="main_menu")]])
             await update.message.reply_text(t(lang, "login_enter_password"), reply_markup=kb)
@@ -3865,7 +3900,7 @@ async def start_telegram_bot():
             context.user_data.pop("login_email", None)
 
             user = await db.users.find_one({"email": email}, {"_id": 0})
-            if not user or not verify_password(password, user["password_hash"]):
+            if not user or not verify_password(password, user.get("password_hash", "")):
                 kb = InlineKeyboardMarkup([
                     [InlineKeyboardButton(t(lang, "btn_login"), callback_data="help_login")],
                     [InlineKeyboardButton(t(lang, "btn_back"), callback_data="main_menu")]
@@ -3897,7 +3932,7 @@ async def start_telegram_bot():
             return
 
         if reg_step == "email":
-            email = text.strip().lower()
+            email = normalize_email(text)
             if not email.endswith("@gmail.com"):
                 kb = InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="main_menu")]])
                 await update.message.reply_text(t(lang, "register_email_invalid"), reply_markup=kb)
@@ -4545,11 +4580,43 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+async def _normalize_existing_user_emails():
+    """One-time migration for accounts created before emails were normalized.
+
+    Lookups now go through normalize_email(), so a row still stored as
+    'Foo@Gmail.com' would become unreachable. Rows whose normalized form
+    would collide with another account are left alone and reported, so no
+    account is silently merged or lost."""
+    migrated = 0
+    collisions = []
+    async for u in db.users.find({}, {"_id": 0, "id": 1, "email": 1}):
+        raw = u.get("email") or ""
+        norm = normalize_email(raw)
+        if norm == raw:
+            continue
+        clash = await db.users.find_one({"email": norm}, {"_id": 0, "id": 1})
+        if clash and clash.get("id") != u.get("id"):
+            collisions.append(raw)
+            continue
+        await db.users.update_one({"id": u["id"]}, {"$set": {"email": norm}})
+        migrated += 1
+    if migrated:
+        logger.info(f"Normalized {migrated} user email(s) to lowercase")
+    if collisions:
+        logger.warning(
+            "These accounts differ from an existing account only by email case and were "
+            f"left unchanged — resolve them manually: {', '.join(collisions)}"
+        )
+
+
 @app.on_event("startup")
 async def startup():
     # Auto-detect Cloudflare zone domain
     await cf_fetch_zone_domain()
-    
+
+    # Must run before the admin seed below, which looks users up by email.
+    await _normalize_existing_user_emails()
+
     # Create indexes
     await db.users.create_index("email", unique=True)
     await db.users.create_index("id", unique=True)
@@ -4564,7 +4631,7 @@ async def startup():
     await db.telegram_prefs.create_index("chat_id", unique=True)
     
     # Seed admin user if not exists
-    admin_email = os.environ.get('ADMIN_EMAIL', f'admin@{DOMAIN_NAME}')
+    admin_email = normalize_email(os.environ.get('ADMIN_EMAIL', f'admin@{DOMAIN_NAME}'))
     admin_pass = os.environ.get('ADMIN_PASSWORD', 'admin123456')
     existing_admin = await db.users.find_one({"email": admin_email})
     if not existing_admin:
