@@ -265,26 +265,42 @@ class TestEmailVerificationToggle:
     """The toggle stored the raw body value and the read path compared with
     `is False`, so a falsy non-bool (0, "") silently kept verification on."""
 
-    @pytest.fixture
-    def smtp_configured(self, session, admin_headers):
-        session.put(f"{API}/admin/smtp/config", headers=admin_headers,
-                    json={"smtp_email": "probe@gmail.com", "smtp_password": "app-password"})
+    @pytest.fixture(autouse=True)
+    def restore_toggle(self, session, admin_headers):
+        """Leave the flag enabled again. Deliberately does NOT configure SMTP:
+        credentials are process-global and written to .env, and the config
+        endpoint ignores empty values, so a test cannot undo them."""
         yield
         session.put(f"{API}/admin/smtp/toggle-verification",
                     json={"enabled": True}, headers=admin_headers)
 
+    @pytest.fixture
+    def smtp_required(self, session, admin_headers):
+        status = session.get(f"{API}/admin/smtp/status", headers=admin_headers).json()
+        if not status.get("has_smtp"):
+            pytest.skip("needs SMTP configured — the public flag short-circuits to "
+                        "False without it, so the read path cannot be observed")
+
     @pytest.mark.parametrize("falsy", [False, 0])
-    def test_falsy_toggle_actually_disables(self, session, admin_headers, smtp_configured, falsy):
+    def test_falsy_toggle_is_stored_as_false(self, session, admin_headers, falsy):
+        """Regression: the raw value used to be stored, and the read path
+        compared it with `is False`, so 0 never counted as disabled."""
         r = session.put(f"{API}/admin/smtp/toggle-verification",
                         json={"enabled": falsy}, headers=admin_headers)
         assert r.status_code == 200, r.text
         assert r.json()["email_verification_enabled"] is False, \
             f"endpoint echoed {r.json()['email_verification_enabled']!r} for {falsy!r}"
+
+    @pytest.mark.parametrize("falsy", [False, 0])
+    def test_falsy_toggle_reaches_the_public_flag(self, session, admin_headers,
+                                                  smtp_required, falsy):
+        session.put(f"{API}/admin/smtp/toggle-verification",
+                    json={"enabled": falsy}, headers=admin_headers)
         pub = session.get(f"{API}/auth/verification-status")
         assert pub.json()["email_verification_enabled"] is False, \
-            f"admin disabled verification but the public flag still says enabled"
+            "admin disabled verification but the public flag still says enabled"
 
-    def test_stored_value_is_a_real_bool(self, session, admin_headers, smtp_configured):
+    def test_stored_value_is_a_real_bool(self, session, admin_headers):
         r = session.put(f"{API}/admin/smtp/toggle-verification",
                         json={"enabled": 1}, headers=admin_headers)
         assert isinstance(r.json()["email_verification_enabled"], bool)
