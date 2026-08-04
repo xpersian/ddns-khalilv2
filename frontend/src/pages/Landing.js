@@ -129,6 +129,11 @@ export default function Landing() {
             <div>
               <div className="font-mono text-sm text-muted-foreground" dir="ltr">
                 <span className="text-primary">$</span> dns --init --zone <span className="text-foreground">{DNS_DOMAIN}</span>
+                <span
+                  className="animate-blink inline-block align-middle ml-1 w-[7px] h-[14px] bg-primary translate-y-[-1px]"
+                  aria-hidden="true"
+                  data-testid="hero-command-caret"
+                />
               </div>
               <h1 className="font-display text-5xl lg:text-7xl xl:text-8xl font-black tracking-tighter leading-[0.95] mt-6" data-testid="hero-title">
                 {isFa ? (
