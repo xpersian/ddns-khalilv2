@@ -344,7 +344,7 @@ export default function Landing() {
                     <Plus weight="bold" className="w-3.5 h-3.5 mt-0.5 text-primary flex-shrink-0" />
                     <span>{p.record_limit === 0 ? (isFa ? 'رکورد نامحدود' : 'Unlimited Records') : (isFa ? `${p.record_limit} رکورد DNS` : `${p.record_limit} DNS Records`)}</span>
                   </li>
-                  {(p.features || []).filter(f => f && f.trim() !== '+').map((feat, fi) => (
+                  {((isFa ? (p.features_fa?.length ? p.features_fa : p.features) : p.features) || []).filter(f => f && f.trim() !== '+').map((feat, fi) => (
                     <li key={fi} className="flex items-start gap-2">
                       <Plus weight="bold" className="w-3.5 h-3.5 mt-0.5 text-primary flex-shrink-0" />
                       <span>{feat}</span>
