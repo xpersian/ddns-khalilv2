@@ -83,6 +83,11 @@ export default function Navbar() {
             <div className="font-mono text-base font-bold tracking-tight lowercase">
               <span className="text-foreground">{DNS_DOMAIN.split('.')[0]}</span>
               <span className="text-muted-foreground">.{DNS_DOMAIN.split('.').slice(1).join('.')}</span>
+              <span
+                className="animate-blink inline-block align-middle ml-1 w-[7px] h-[15px] bg-primary translate-y-[-1px]"
+                aria-hidden="true"
+                data-testid="navbar-logo-caret"
+              />
             </div>
           </Link>
 
