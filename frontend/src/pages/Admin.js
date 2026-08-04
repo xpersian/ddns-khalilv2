@@ -271,6 +271,20 @@ export default function Admin() {
     setBotLoading(false);
   }, []);
 
+  // Bot startup takes ~15-25s (webhook cleanup + conflict flush + polling check),
+  // so keep polling the status until it reports running.
+  const pollBotStatus = useCallback(async (attempts = 15, delay = 3000) => {
+    for (let i = 0; i < attempts; i++) {
+      await new Promise((r) => setTimeout(r, delay));
+      let res;
+      try { res = await adminAPI.getBotStatus(); } catch { continue; }
+      setBotStatus(res.data);
+      setNewAdminId(res.data.admin_id || '');
+      if (res.data.bot_running) return;
+      if (i > 0 && !res.data.bot_starting) return;
+    }
+  }, []);
+
   const fetchZones = useCallback(async () => {
     setZonesLoading(true);
     try {
@@ -521,7 +535,8 @@ export default function Admin() {
       toast.success(t('admin_bot_token_updated'));
       setNewBotToken('');
       setShowTokenInput(false);
-      setTimeout(() => fetchBotStatus(), 3000);
+      setBotStatus((s) => ({ ...s, has_token: true, bot_starting: true }));
+      pollBotStatus();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setBotActionLoading(''); }
   };
@@ -563,7 +578,8 @@ export default function Admin() {
     try {
       await adminAPI.startBot();
       toast.success(t('admin_bot_started'));
-      setTimeout(() => fetchBotStatus(), 5000);
+      setBotStatus((s) => ({ ...s, bot_running: false, bot_starting: true }));
+      pollBotStatus();
     } catch (err) { toast.error(err.response?.data?.detail || 'Failed'); }
     finally { setBotActionLoading(''); }
   };
@@ -1141,8 +1157,13 @@ export default function Admin() {
                   <div className="flex items-center gap-3 flex-wrap">
                     <Label className="min-w-[100px]">{t('admin_bot_status')}:</Label>
                     {botStatus.bot_running ? (
-                      <Badge className="bg-green-500/10 text-green-600 border-green-500/20">
+                      <Badge className="bg-green-500/10 text-green-600 border-green-500/20" data-testid="bot-status-running">
                         ● {t('admin_bot_running')}
+                      </Badge>
+                    ) : botStatus.bot_starting ? (
+                      <Badge variant="outline" className="text-primary border-primary/40" data-testid="bot-status-starting">
+                        <Loader2 className="w-3 h-3 animate-spin me-1" />
+                        {lang === 'fa' ? 'در حال راه‌اندازی…' : 'Starting…'}
                       </Badge>
                     ) : botStatus.has_token ? (
                       <Badge variant="outline" className="text-yellow-600 border-yellow-500/30">

@@ -2195,6 +2195,7 @@ async def admin_bot_status(admin: dict = Depends(get_admin_user)):
         "masked_token": masked_token,
         "admin_id": TELEGRAM_ADMIN_ID,
         "bot_running": bot_running,
+        "bot_starting": bool(telegram_bot_starting and not bot_running),
         "bot_username": bot_username,
     }
 
@@ -2624,8 +2625,18 @@ TELEGRAM_ADMIN_ID = os.environ.get('TELEGRAM_ADMIN_ID', '')
 SMTP_EMAIL = os.environ.get('SMTP_EMAIL', '')
 SMTP_PASSWORD = os.environ.get('SMTP_PASSWORD', '')
 telegram_bot_app = None
+telegram_bot_starting = False
 
 async def start_telegram_bot():
+    """Start the bot, tracking the (slow) startup phase so the UI can show it."""
+    global telegram_bot_starting
+    telegram_bot_starting = True
+    try:
+        await _start_telegram_bot_impl()
+    finally:
+        telegram_bot_starting = False
+
+async def _start_telegram_bot_impl():
     """Start the Telegram bot in polling mode if token is configured."""
     global telegram_bot_app
     if not TELEGRAM_BOT_TOKEN:
@@ -2633,11 +2644,27 @@ async def start_telegram_bot():
         return
 
     try:
-        from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup
+        from telegram import Update, BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, CallbackQuery
+        from telegram.error import BadRequest
         from telegram.ext import ApplicationBuilder, CommandHandler, CallbackQueryHandler, MessageHandler, ContextTypes, filters
     except ImportError:
         logger.warning("Telegram bot: python-telegram-bot not installed, skipping.")
         return
+
+    # Telegram rejects edits that produce identical content; treat that as a no-op.
+    if not getattr(CallbackQuery.edit_message_text, "_ignore_not_modified", False):
+        _orig_edit_text = CallbackQuery.edit_message_text
+
+        async def _edit_text_ignore_not_modified(self, *args, **kwargs):
+            try:
+                return await _orig_edit_text(self, *args, **kwargs)
+            except BadRequest as e:
+                if "not modified" in str(e).lower():
+                    return None
+                raise
+
+        _edit_text_ignore_not_modified._ignore_not_modified = True
+        CallbackQuery.edit_message_text = _edit_text_ignore_not_modified
 
     # ── Translations ──────────────────────────────────────────
     import re as _re
