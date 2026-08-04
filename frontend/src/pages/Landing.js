@@ -457,6 +457,7 @@ export default function Landing() {
             ]},
             { title: isFa ? 'پشتیبانی' : 'support', items: [
               { label: isFa ? 'تلگرام' : 'telegram', href: telegramUrl || '#', external: !!telegramUrl },
+              { label: 'github', href: 'https://github.com/admin6501/ddns-khalilv2', external: true },
             ]},
           ].map((col) => (
             <div key={col.title}>
