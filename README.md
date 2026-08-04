@@ -1,7 +1,5 @@
 <div align="center">
 
-<br>
-
 ```
  ██████╗ ██████╗ ███╗   ██╗███████╗    ██████╗ ███╗   ██╗███████╗
 ██╔════╝██╔═══██╗████╗  ██║██╔════╝    ██╔══██╗████╗  ██║██╔════╝
@@ -11,165 +9,184 @@
  ╚═════╝ ╚═════╝ ╚═╝  ╚═══╝╚═╝         ╚═════╝ ╚═╝  ╚═══╝╚══════╝
 ```
 
-<br>
-
 # Free DNS Management Platform
 
-**Free subdomains for everyone — install once, run on your own domain**
+**Self-hosted subdomain / DNS service on your own domain — powered by the Cloudflare API**
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com/)
 [![React](https://img.shields.io/badge/React-20232A?style=for-the-badge&logo=react&logoColor=61DAFB)](https://reactjs.org/)
 [![MongoDB](https://img.shields.io/badge/MongoDB-47A248?style=for-the-badge&logo=mongodb&logoColor=white)](https://www.mongodb.com/)
 [![Cloudflare](https://img.shields.io/badge/Cloudflare-F38020?style=for-the-badge&logo=cloudflare&logoColor=white)](https://www.cloudflare.com/)
-[![Nginx](https://img.shields.io/badge/Nginx-009639?style=for-the-badge&logo=nginx&logoColor=white)](https://nginx.org/)
-[![Let's Encrypt](https://img.shields.io/badge/Let's_Encrypt-003A70?style=for-the-badge&logo=letsencrypt&logoColor=white)](https://letsencrypt.org/)
+[![Telegram](https://img.shields.io/badge/Telegram_Bot-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://core.telegram.org/bots)
+[![License](https://img.shields.io/badge/License-MIT-black?style=for-the-badge)](LICENSE)
 
-<br>
-
-[Quick Install](#-quick-install) •
-[Features](#-features) •
+[Install](#-quick-install) •
+[Features](#-features-in-detail) •
 [Configuration](#%EF%B8%8F-configuration) •
-[API Docs](#-api-documentation) •
+[API](#-api-reference) •
+[Support](#-support--feedback) •
 [فارسی](README.fa.md)
-
-<br>
 
 </div>
 
 ---
 
-<br>
-
 ## 🌐 About
 
-A fully **open-source DNS management platform** that works with your own domain. Users can create **A**, **AAAA**, **CNAME**, and **NS** records for free. Records are applied directly to real DNS via the **Cloudflare API**.
+An open-source, **self-hosted DNS management platform**. You install it once on your own server with your own domain, and your users can register and create real **A / AAAA / CNAME / NS** records under your domain — for free or via paid plans that you define.
 
-> **Example:** If your domain is `example.com`, users can create subdomains like `mysite.example.com`.
+Records are **not simulated**: every create / edit / delete call is applied to real DNS through the **Cloudflare API**, so propagation happens on Cloudflare's global anycast network.
 
-<br>
+> **Example:** if your domain is `example.com`, a user can create `mysite.example.com` and point it at any IP.
 
-## ✨ Features
+Three interfaces are included out of the box:
 
-<table>
-<tr>
-<td width="50%">
+| Interface | Who it's for | What it does |
+|-----------|--------------|--------------|
+| **Web app** (React) | End users | Register, manage records, referrals, CSV import/export, activity log |
+| **Admin panel** (`/admin`) | You | Users, records, plans, zones, settings, backups, logs |
+| **Telegram bot** | Everyone | Full DNS management + admin panel inside Telegram (FA/EN) |
 
-### 👤 Users
-- Register & login with email and password
-- **Sign in with Google** (OAuth) — one-click login
-- **Forgot Password** flow with 6-digit email code (requires SMTP)
-- Email verification with 6-digit code (optional, admin-configurable)
-- Create A, AAAA, CNAME, NS records
-- Free records per user (configurable via Free plan limit)
-- Edit and delete records
-- **Bulk CSV Import / Export** of personal records
-- Referral system — earn bonus records by inviting friends
+---
 
-</td>
-<td width="50%">
+## ✨ Features in Detail
+
+### 👤 User Account & Authentication
+
+- Email + password registration with **bcrypt** hashing and **JWT** sessions (72h).
+- **Sign in with Google** (OAuth) — configured entirely from the admin panel, no redeploy needed.
+- **Google-only mode**: admin can disable the email signup form globally; the register page automatically falls back to the Google button.
+- **Email verification** with a 6-digit code (optional, requires SMTP, toggleable by admin).
+- **Forgot password** flow — 6-digit code sent by email, then password reset (auto-hidden when SMTP is not configured).
+- **First-login password setup** for Google users (`SecurePasswordInit`) so they can also use the bot / email login.
+- Change own password from the dashboard or from the Telegram bot.
+- Email normalization (Gmail dot/alias aware) to prevent duplicate accounts.
+
+### 🖥 User Dashboard
+
+- **Stats grid**: record count vs. limit, active plan, primary zone, referral bonus.
+- **Record table** with search, refresh, one-click copy of the full hostname, inline edit and delete.
+- **Create record dialog** — only the record types enabled by the admin are shown; multi-zone selector when several Cloudflare zones are active; optional Cloudflare proxy flag.
+- **Limit warning banner** with an upgrade CTA when the plan limit is reached, and a clear "record creation disabled" banner when the admin turns all record types off.
+- **CSV export** of your own records and **CSV import** (with downloadable template, per-row validation, limit + zone enforcement, and a per-row result report).
+- **Referral card** — invite link, copy button, successful-invite count and bonus records earned.
+- **Activity log** with pagination (record created / updated / deleted, login, register, telegram linked …).
 
 ### 🛡 Admin Panel
-- Full user management (delete / change plan / reset password)
-- View and manage all DNS records
-- **Bulk CSV Export** of every user's records
-- **Bulk CSV Import** of records on behalf of users (with per-user limit + zone enforcement)
-- Plan management (create / edit / delete)
-- **Multi-zone Cloudflare support** with per-zone enable/disable toggle
-- **Google OAuth configuration** directly from the admin panel
-- **Email-signup form toggle** — disable email registration globally (Google-only mode)
-- **Record-type toggles** — enable/disable each DNS record type (A, AAAA, CNAME, NS); disabled types are hidden from the create form, and if all are off, record creation is turned off entirely (web + Telegram bot)
-- Site settings (Telegram contact, referral bonus, email verification)
-- SMTP configuration for email verification & password reset
-- Cloudflare API token management & live test
-- Bulk actions (batch plan change, batch delete)
-- Activity logs with filters
-- Automated MongoDB backup scheduler
 
-</td>
-</tr>
-<tr>
-<td width="50%">
+Five tabs (`/admin`):
+
+**1. Users**
+- List all users with plan, record count, verification state and source.
+- Change a user's plan, reset a user's password, delete a user (their DNS records are removed from Cloudflare too).
+- **Bulk actions**: batch plan change, batch delete.
+- Drill into any user's records.
+
+**2. Records**
+- View every DNS record created on the platform with its owner.
+- Create a record on behalf of a user, delete any record.
+- **Bulk CSV export** of all records, **bulk CSV import** on behalf of users (respects each user's limit and the enabled zones).
+
+**3. Plans**
+- Create / edit / delete plans: `plan_id`, name (EN + FA), price (EN + FA), record limit (`0` = unlimited), feature list (EN + FA), "popular" badge, sort order.
+- Plan data drives the public pricing section — Persian names, prices **and feature lists** are shown when the site language is Persian.
+- The **Free plan limit is the single source of truth** for how many records a new user gets.
+
+**4. Logs**
+- Activity log for the whole platform with pagination and filters by user and action type.
+
+**5. Settings**
+- **Contact / Telegram**: Telegram username or full URL used by pricing CTAs and the footer, plus custom contact messages (EN/FA).
+- **Referral bonus per invite** (integer, admin-defined).
+- **Record-type toggles**: enable/disable `A`, `AAAA`, `CNAME`, `NS` individually. Disabled types disappear from the web form *and* the bot; if all are off, record creation is blocked everywhere.
+- **Multi-zone Cloudflare support**: add / remove zones and enable/disable each one; users pick a zone when creating a record.
+- **Cloudflare API token** management with a live "test token" call.
+- **Google OAuth** client ID / secret, and the email-signup toggle.
+- **SMTP** configuration + email-verification toggle + status check.
+- **Telegram bot** management: token, admin chat ID, start / stop, live status.
+- **Automated MongoDB backups**: schedule (interval), send the archive to the admin's Telegram, run a backup right now, test the bot, and **restore** from an uploaded archive (database and/or config).
 
 ### 🤖 Telegram Bot
-- Full DNS management via Telegram
-- User registration and login
-- Create, edit, delete records
-- **Multi-zone selection** when adding a record (filters disabled zones automatically)
-- **Respects admin record-type toggles** — only enabled types are offered; if all are disabled, record creation is blocked with a notice
-- View record list and account info
-- Admin notifications for new registrations
-- Configurable from admin web panel (token, admin chat ID, start/stop)
-- Bilingual support (FA/EN)
 
-</td>
-<td width="50%">
+- Bilingual (Persian / English) with per-chat language memory.
+- **Register** and **login** inside the chat (including email verification when enabled).
+- **My records**, **add record** (type → zone → subdomain → value, fully guided), **delete record** with confirmation.
+- **Account status**: plan, usage, referral code, invites.
+- **Referral link**, **change my password**, **logout**.
+- Respects admin record-type toggles and disabled zones automatically.
+- **Admin panel inside the bot**: stats, users (paginated), records, plans, settings editing, logs, and changing any user's password.
+- Admin notifications for every new registration (web or bot).
+- Managed from the web admin panel or `ddns-menu` (token / admin ID / start / stop), with lock-file cleanup so only one bot instance runs.
 
-### 🎨 Design & Technical
-- **Terminal-aesthetic UI** with bright emerald accent
-- **Bilingual**: Persian (RTL) and English — true RTL support
-- Dark and light themes (light by default)
-- Responsive design with Shadcn UI
-- JWT authentication + Google OAuth
-- Direct Cloudflare API integration
-- MongoDB database with automatic backups
-- **Fully dynamic domain name** (brand = install domain; zone refs = Cloudflare zone)
-- Single-source-of-truth plan limits (Free plan defines free record count)
-- Automated install with Bash script
-- Free SSL with Let's Encrypt
-- `ddns-menu` command for quick server management
+### 🎨 Design & Frontend
 
-</td>
-</tr>
-</table>
+- **Terminal aesthetic** UI: monospace accents, blinking cursors, scanlines, emerald primary color.
+- Full **RTL** Persian support and English LTR, switchable from the navbar; every string lives in `src/lib/i18n.js`.
+- **Dark / light** themes with persisted preference.
+- Responsive layout built on Tailwind CSS + shadcn/ui + lucide/phosphor icons.
+- `data-testid` attributes across interactive elements for reliable automated testing.
+- **Fully dynamic domain**: the brand shown everywhere comes from env vars, never hardcoded.
 
-<br>
+### ⚙️ Ops & Infrastructure
+
+- **One-command installer** (`install.sh`) for Ubuntu/Debian: dependencies, MongoDB, Python venv, frontend production build, systemd service, Nginx vhost, Let's Encrypt SSL, UFW firewall.
+- `ddns-menu` global command for day-to-day management.
+- **Export / Import** archives for painless server migration.
+- **Change domain** flow that rewrites both `.env` files, the Nginx vhost and re-issues SSL.
+- Automatic swap creation on low-RAM servers during the frontend build.
+- Backend logs via `journalctl`, service status with RAM usage and SSL expiry in the status screen.
+
+---
 
 ## 🏗 Architecture
 
 ```
-                    ┌─────────────────────────────────────────┐
-                    │              Nginx (443/80)              │
-                    │         SSL + Reverse Proxy              │
-                    └──────────┬───────────────┬──────────────┘
-                               │               │
-                    ┌──────────▼──────┐ ┌──────▼──────────────┐
-                    │   React SPA     │ │   FastAPI Backend    │
-                    │   (Build)       │ │   Port 8001          │
-                    │                 │ │                      │
-                    │  • Landing Page │ │  • /api/auth/*       │
-                    │  • Dashboard    │ │  • /api/dns/*        │
-                    │  • Admin Panel  │ │  • /api/admin/*      │
-                    │  • Auth Pages   │ │  • /api/referral/*   │
-                    │  • i18n (FA/EN) │ │  • /api/plans        │
-                    └─────────────────┘ │  • /api/telegram/*   │
-                                        └───────┬──────┬───────┘
-                                                │      │
-                                     ┌──────────▼──┐ ┌─▼────────────┐
-                                     │  MongoDB    │ │  Cloudflare  │
-                                     │  Database   │ │  DNS API     │
-                                     └─────────────┘ └──────────────┘
+        Browser / Telegram
+                │
+                ▼
+        Nginx  (443, SSL)
+         │            │
+         │ /          │ /api
+         ▼            ▼
+  React build   FastAPI (uvicorn, 8001)
+                      │        │
+                      ▼        ▼
+                 MongoDB   Cloudflare API
+                      │
+                      ▼
+             Telegram Bot (same process)
 ```
 
-<br>
+| Layer | Technology |
+|-------|-----------|
+| Frontend | React 19, CRA/Craco, Tailwind CSS, shadcn/ui, react-router |
+| Backend | FastAPI, Uvicorn, Motor (async MongoDB), PyJWT, bcrypt, httpx |
+| Bot | python-telegram-bot (started inside the FastAPI lifecycle) |
+| Database | MongoDB |
+| DNS | Cloudflare API v4 (multi-zone) |
+| Web server | Nginx + Let's Encrypt (certbot) |
+| Process manager | systemd (`ddns-backend.service`) |
+
+---
 
 ## 🚀 Quick Install
 
 ### Prerequisites
 
-| Software | Version | Notes |
-|----------|---------|-------|
-| Ubuntu / Debian | 20.04+ / 11+ | OS |
-| Root access | — | Required for service installation |
-| Domain | — | Must point to server IP |
-| Cloudflare | — | API Token + Zone ID |
+| Requirement | Notes |
+|-------------|-------|
+| Ubuntu 20.04+ / Debian 11+ | Fresh VPS recommended |
+| Root access | Needed for systemd, Nginx, SSL |
+| A domain | Its A record must point to the server IP |
+| Cloudflare account | API Token (Edit DNS) + Zone ID |
 
-### One-line Install
+### One-line install
 
 ```bash
 bash <(curl -fsSL https://raw.githubusercontent.com/admin6501/ddns-khalilv2/main/install.sh)
 ```
 
-Or:
+Or manually:
 
 ```bash
 git clone https://github.com/admin6501/ddns-khalilv2.git
@@ -177,22 +194,22 @@ cd ddns-khalilv2
 sudo bash install.sh
 ```
 
-The installer will ask for:
+The installer asks for:
 
-| Question | Example | Description |
-|----------|---------|-------------|
-| Domain name | `yourdomain.com` | Domain for subdomains |
-| SSL email | `you@email.com` | For Let's Encrypt |
-| Cloudflare API Token | — | [Create token](https://dash.cloudflare.com/profile/api-tokens) (Edit DNS access) |
-| Cloudflare Zone ID | — | From domain Overview dashboard |
+| Question | Example | Notes |
+|----------|---------|-------|
+| Domain name | `yourdomain.com` | Root domain for subdomains |
+| SSL email | `you@email.com` | Let's Encrypt notifications |
+| Cloudflare API Token | — | [Create one](https://dash.cloudflare.com/profile/api-tokens) with *Edit zone DNS* |
+| Cloudflare Zone ID | — | Domain → Overview → API section |
 | Admin email | `admin@yourdomain.com` | Admin panel login |
-| Admin password | — | Min 6 characters |
-| MongoDB URL | `mongodb://localhost:27017` | Default: local |
-| Database name | `dns_management` | Your choice |
+| Admin password | — | Minimum 6 characters |
+| MongoDB URL | `mongodb://localhost:27017` | Local by default |
+| Database name | `dns_management` | Free choice |
+| Telegram bot token / admin ID | — | Optional, can be set later |
+| SMTP email / password | — | Optional, can be set later |
 
-### Management Menu
-
-After installation, access the management menu anytime:
+### Management menu
 
 ```bash
 sudo ddns-menu
@@ -202,529 +219,373 @@ sudo ddns-menu
   1 )  Install          Full installation from scratch
   2 )  Start            Start all services
   3 )  Stop             Stop all services
-  4 )  Restart          Restart services
-  5 )  Uninstall        Full removal (service + database + SSL + files)
-  6 )  Status           Service status + RAM usage + SSL expiry
-  7 )  Logs             View backend logs
-  8 )  Update           Update from GitHub + rebuild
-  9 )  SSL Renew        Renew SSL certificate
-  t )  Telegram Bot     Configure Telegram bot
-  d )  Change Domain    Change domain name
-  e )  Export           Backup for server migration
-  i )  Import           Restore from backup
+  4 )  Restart          Restart all services
+  5 )  Uninstall        Remove everything (service + DB + SSL + files)
+  6 )  Status           Services + RAM usage + SSL expiry + bot status
+  7 )  Logs             Backend logs
+  8 )  Update           Pull latest code & rebuild
+  9 )  SSL Renew        Renew / re-issue certificate
+  e )  Export           Backup data for migration
+  i )  Import           Restore data from backup
+  t )  Telegram Bot     Configure the Telegram bot
+  d )  Change Domain    Change the site domain
+  0 )  Exit
 ```
 
-CLI commands also available:
+Non-interactive equivalents:
 
 ```bash
-sudo bash install.sh start
-sudo bash install.sh stop
-sudo bash install.sh restart
-sudo bash install.sh update
-sudo bash install.sh status
-sudo bash install.sh export
-sudo bash install.sh import
+sudo bash install.sh start | stop | restart | update | status | export | import
 ```
 
-<br>
+---
 
 ## 🔄 Server Migration
 
-To migrate your site to a new server **without losing data**:
-
-**1. On old server — create backup:**
+**1. Old server — create the archive**
 
 ```bash
-sudo bash install.sh export
+sudo bash install.sh export      # ~/ddns-backup-*.tar.gz
 ```
 
-**2. Transfer backup file to new server:**
+**2. Copy it over**
 
 ```bash
 scp ~/ddns-backup-*.tar.gz root@NEW_SERVER_IP:~/
 ```
 
-**3. On new server — install:**
+**3. New server — install, then import**
 
 ```bash
-sudo bash install.sh
-# Select option 1 (Install)
-# Enter domain and Cloudflare credentials
+sudo bash install.sh          # option 1 (Install)
+sudo bash install.sh import   # give the archive path
 ```
 
-**4. On new server — restore backup:**
+Import modes: **Database + Config** (recommended), **Database only**, **Config only**.
 
-```bash
-sudo bash install.sh import
-# Enter the backup file path
-```
+> After migrating, repoint the domain's A record to the new IP and renew SSL (`ddns-menu` → 9).
 
-During import you can choose:
-- **Database + Config** — Full restore (recommended)
-- **Database only** — Keep current config
-- **Config only** — Keep current database
-
-> **Note:** Update your domain's DNS to point to the new server IP and renew SSL (`sudo ddns-menu` → option 9)
-
-<br>
+---
 
 ## ⚙️ Configuration
 
-### Dynamic Domain Name
+### Dynamic domain
 
-The domain name is **not hardcoded** and is read from environment variables. When you install with `install.sh`, the domain you enter is automatically displayed throughout the site.
+Nothing is hardcoded — the brand name comes from environment variables written by the installer.
 
-| Variable | File | Description |
-|----------|------|-------------|
-| `DOMAIN_NAME` | `backend/.env` | Backend domain name |
-| `REACT_APP_DOMAIN_NAME` | `frontend/.env` | Frontend domain name |
+| Variable | File | Purpose |
+|----------|------|---------|
+| `DOMAIN_NAME` | `backend/.env` | Domain used by the API and the bot |
+| `REACT_APP_DOMAIN_NAME` | `frontend/.env` | Domain shown in the UI |
 
-### Environment Files
-
-<details>
-<summary><b>backend/.env</b></summary>
+### `backend/.env`
 
 ```env
 MONGO_URL=mongodb://localhost:27017
 DB_NAME=dns_management
-CLOUDFLARE_API_TOKEN=your_token_here
-CLOUDFLARE_ZONE_ID=your_zone_id_here
+CORS_ORIGINS=https://yourdomain.com
+CLOUDFLARE_API_TOKEN=your_cloudflare_token
+CLOUDFLARE_ZONE_ID=your_zone_id
 JWT_SECRET=auto_generated_on_install
 DOMAIN_NAME=yourdomain.com
 ADMIN_EMAIL=admin@yourdomain.com
-ADMIN_PASSWORD=your_password
-TELEGRAM_BOT_TOKEN=your_bot_token (optional)
-TELEGRAM_ADMIN_ID=your_telegram_id (optional)
-SMTP_EMAIL=your_gmail@gmail.com (optional)
-SMTP_PASSWORD=your_app_password (optional)
+ADMIN_PASSWORD=your_admin_password
+TELEGRAM_BOT_TOKEN=optional
+TELEGRAM_ADMIN_ID=optional
+SMTP_EMAIL=optional
+SMTP_PASSWORD=optional
 ```
-</details>
 
-<details>
-<summary><b>frontend/.env</b></summary>
+### `frontend/.env`
 
 ```env
 REACT_APP_BACKEND_URL=https://yourdomain.com
 REACT_APP_DOMAIN_NAME=yourdomain.com
 ```
-</details>
 
-<br>
+> The admin user is created/updated on startup from `ADMIN_EMAIL` / `ADMIN_PASSWORD`.
 
-## 🔐 Google OAuth Setup (Optional)
+---
 
-The platform supports **Sign in with Google** for one-click registration and login. To enable it, you need a **Google OAuth Client ID and Client Secret** from Google Cloud Console.
+## 🔐 Google OAuth (optional)
 
-### Step 1 — Create a Google Cloud Project
+1. Open [console.cloud.google.com](https://console.cloud.google.com/) → **New Project**.
+2. **APIs & Services → OAuth consent screen** → *External* → fill app name, support email, developer email → save.
+3. **Credentials → Create credentials → OAuth client ID → Web application**:
+   - Authorized JavaScript origins: `https://yourdomain.com`
+   - Authorized redirect URIs: `https://yourdomain.com`
+4. Copy the **Client ID** and **Client Secret** into **Admin panel → Settings → Google OAuth** and enable it.
 
-1. Visit [console.cloud.google.com](https://console.cloud.google.com/)
-2. Click **Select a project** → **New Project**
-3. Give it a name (e.g. `dns-management`) and click **Create**
+Google login then appears on the login and register pages. You can also switch the site to **Google-only** mode by disabling email signup.
 
-### Step 2 — Configure the OAuth Consent Screen
+---
 
-1. In the left menu go to **APIs & Services** → **OAuth consent screen**
-2. Choose **External** user type → **Create**
-3. Fill in:
-   - **App name**: your site name (e.g. `yourdomain.com`)
-   - **User support email**: your email
-   - **Developer contact email**: your email
-4. Add scopes: **email** and **profile** (they are usually pre-selected)
-5. Save and continue until finished
+## 📧 SMTP (optional)
 
-### Step 3 — Create OAuth Credentials
+Needed for email verification and password reset.
 
-1. Go to **APIs & Services** → **Credentials**
-2. Click **+ Create Credentials** → **OAuth client ID**
-3. Application type: **Web application**
-4. **Authorized JavaScript origins**:
-   ```
-   https://yourdomain.com
-   ```
-5. **Authorized redirect URIs**:
-   ```
-   https://yourdomain.com
-   https://yourdomain.com/login
-   https://yourdomain.com/register
-   ```
-6. Click **Create**
+1. Enable 2-step verification on your Google account and create an **App Password** ([myaccount.google.com/apppasswords](https://myaccount.google.com/apppasswords)).
+2. Put the address and the 16-character app password into **Admin panel → Settings → SMTP**.
+3. Toggle **email verification** on if you want new users to confirm their address.
 
-Google will show you the **Client ID** and **Client Secret**. Copy both.
+When SMTP is off, the "forgot password" entry point is hidden automatically.
 
-### Step 4 — Add Credentials to the Admin Panel
+---
 
-1. Log in to your site as admin
-2. Go to **Admin Panel** → **Settings** tab → **Google OAuth** card
-3. Paste your **Client ID** and **Client Secret**
-4. Toggle **Enabled** on and save
+## 📡 API Reference
 
-The "Continue with Google" button will automatically appear on login and registration pages.
+Base URL: `https://yourdomain.com/api`
+Auth: `Authorization: Bearer <JWT>`
 
-> **Tip:** For local development use `http://localhost:3000` instead of your production URL in both the origins and redirect URIs.
+### Auth
 
-<br>
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/auth/register` | Register (supports `?ref=` referral code) |
+| POST | `/auth/login` | Login, returns JWT |
+| GET | `/auth/me` | Current user profile + limits |
+| POST | `/auth/verify-email` | Verify the 6-digit code |
+| POST | `/auth/resend-code` | Resend verification code |
+| GET | `/auth/verification-status` | Is email verification enabled |
+| GET | `/auth/signup-status` | Is email signup enabled |
+| GET | `/auth/password-reset-status` | Is password reset available (SMTP) |
+| POST | `/auth/forgot-password` | Send reset code |
+| POST | `/auth/reset-password` | Reset password with code |
+| PUT | `/auth/password` | Change own password |
+| POST | `/auth/set-initial-password` | Set first password (Google users) |
+| GET | `/auth/google/config` | Public Google OAuth config |
+| POST | `/auth/google` | Login / register with Google |
 
-## 📧 SMTP Setup (Optional)
+### DNS records
 
-SMTP is required for **Forgot Password** and optional **Email Verification** features.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/dns/records` | My records |
+| POST | `/dns/records` | Create a record |
+| PUT | `/dns/records/{id}` | Update a record |
+| DELETE | `/dns/records/{id}` | Delete a record |
+| GET | `/dns/zones` | Zones available to the user |
+| GET | `/dns/records/export` | Export my records as CSV |
+| GET | `/dns/records/import/template` | CSV import template |
+| POST | `/dns/records/import` | Bulk import from CSV |
 
-1. Go to **Admin Panel** → **Settings** → **SMTP Configuration**
-2. For Gmail:
-   - **SMTP Email**: `you@gmail.com`
-   - **SMTP Password**: a [Gmail App Password](https://myaccount.google.com/apppasswords) (not your regular password)
-3. Save and test
+### Public / misc
 
-Without SMTP configured, the "Forgot Password" page shows a graceful "Reset unavailable" message.
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/plans` | Public plan list (EN + FA fields) |
+| GET | `/config` | Site config (domain, contact, toggles) |
+| GET | `/settings/contact` | Contact info |
+| GET | `/referral/stats` | My referral stats |
+| GET | `/activity/logs` | My activity log (paginated) |
+| GET | `/telegram/status` | Bot status |
+| GET | `/telegram/debug` | Bot diagnostics |
 
-<br>
+### Admin (role `admin` required)
 
-## 📡 API Documentation
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/admin/users` | All users |
+| DELETE | `/admin/users/{id}` | Delete user + their records |
+| PUT | `/admin/users/{id}/plan` | Change plan |
+| PUT | `/admin/users/{id}/password` | Reset password |
+| GET | `/admin/users/{id}/records` | User's records |
+| POST | `/admin/users/bulk/plan` | Bulk plan change |
+| POST | `/admin/users/bulk/delete` | Bulk delete |
+| GET | `/admin/records` | All records |
+| POST | `/admin/dns/records` | Create record for a user |
+| DELETE | `/admin/dns/records/{id}` | Delete any record |
+| GET | `/admin/records/export` | Export all records (CSV) |
+| GET | `/admin/records/import/template` | Admin CSV template |
+| POST | `/admin/records/import` | Bulk import for users |
+| GET / POST | `/admin/plans` | List / create plans |
+| PUT / DELETE | `/admin/plans/{plan_id}` | Edit / delete a plan |
+| GET / PUT | `/admin/settings` | Site settings |
+| GET / PUT | `/admin/record-types` | Record-type toggles |
+| GET / POST | `/admin/zones` | List / add Cloudflare zones |
+| PATCH / DELETE | `/admin/zones/{zone_id}` | Enable-disable / remove a zone |
+| GET / PUT | `/admin/cf-token` | Cloudflare token |
+| POST | `/admin/cf-token/test` | Live token test |
+| GET / PUT | `/admin/google-oauth` | Google OAuth settings |
+| GET / PUT | `/admin/smtp/status`, `/admin/smtp/config` | SMTP settings |
+| PUT | `/admin/smtp/toggle-verification` | Toggle email verification |
+| GET / PUT | `/admin/auth/signup-status`, `/admin/auth/toggle-email-signup` | Email signup toggle |
+| GET / PUT | `/admin/bot/status`, `/admin/bot/token`, `/admin/bot/admin-id` | Bot config |
+| POST | `/admin/bot/start`, `/admin/bot/stop` | Start / stop the bot |
+| GET / PUT | `/admin/backup/settings` | Backup scheduler |
+| POST | `/admin/backup/now`, `/admin/backup/restore`, `/admin/backup/test-bot` | Backup actions |
+| GET | `/admin/activity/logs` | Platform activity log |
 
-All API routes are prefixed with `/api`.
+Interactive docs (FastAPI): `https://yourdomain.com/api/docs` when enabled.
 
-### Authentication
-
-| Method | Path | Description | Auth |
-|--------|------|-------------|------|
-| `POST` | `/api/auth/register` | Register (with optional referral code) | — |
-| `POST` | `/api/auth/login` | Login | — |
-| `GET` | `/api/auth/me` | Current user info | Bearer Token |
-| `POST` | `/api/auth/verify-email` | Verify email with code | — |
-| `POST` | `/api/auth/resend-code` | Resend verification code | — |
-| `GET` | `/api/auth/verification-status` | Check if verification is enabled | — |
-| `GET` | `/api/auth/signup-status` | Whether the email signup form is enabled | — |
-| `GET` | `/api/auth/password-reset-status` | Whether forgot-password is available (SMTP) | — |
-| `POST` | `/api/auth/forgot-password` | Request a 6-digit password reset code | — |
-| `POST` | `/api/auth/reset-password` | Set a new password using the reset code | — |
-| `GET` | `/api/auth/google/config` | Public Google OAuth config (enabled, client_id) | — |
-| `POST` | `/api/auth/google` | Exchange a Google ID token for a session | — |
-| `POST` | `/api/auth/set-initial-password` | Set a local password for Google-registered users | Bearer Token |
-
-### DNS Records
-
-| Method | Path | Description | Auth |
-|--------|------|-------------|------|
-| `GET` | `/api/dns/records` | User's records list | Bearer Token |
-| `POST` | `/api/dns/records` | Create new record | Bearer Token |
-| `PUT` | `/api/dns/records/{id}` | Edit record | Bearer Token |
-| `DELETE` | `/api/dns/records/{id}` | Delete record | Bearer Token |
-| `GET` | `/api/dns/zones` | List enabled zones available for selection | Bearer Token |
-| `GET` | `/api/dns/records/export` | Export user's records as CSV | Bearer Token |
-| `POST` | `/api/dns/records/import` | Bulk import records from CSV | Bearer Token |
-| `GET` | `/api/dns/records/import/template` | Download CSV template | Bearer Token |
-
-### Referral
-
-| Method | Path | Description | Auth |
-|--------|------|-------------|------|
-| `GET` | `/api/referral/stats` | Invitation stats | Bearer Token |
-
-### Plans & Public Config
-
-| Method | Path | Description | Auth |
-|--------|------|-------------|------|
-| `GET` | `/api/plans` | Plans list | — |
-| `GET` | `/api/config` | Site config (domain, contact, enabled/supported record types) | — |
-| `GET` | `/api/settings/contact` | Telegram contact info | — |
-
-### Admin Panel
-
-<details>
-<summary><b>User Management</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/users` | All users list |
-| `DELETE` | `/api/admin/users/{id}` | Delete user |
-| `PUT` | `/api/admin/users/{id}/plan` | Change user plan |
-| `PUT` | `/api/admin/users/{id}/password` | Change user password |
-| `GET` | `/api/admin/users/{id}/records` | User's records |
-| `POST` | `/api/admin/users/bulk/plan` | Bulk plan change |
-| `POST` | `/api/admin/users/bulk/delete` | Bulk delete |
-
-</details>
-
-<details>
-<summary><b>Record Management</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/records` | All records list |
-| `GET` | `/api/admin/records/export` | Export ALL records as CSV (with user_email column) |
-| `GET` | `/api/admin/records/import/template` | Download admin CSV template |
-| `POST` | `/api/admin/records/import` | Bulk import records on behalf of users (CSV with user_email column) |
-| `POST` | `/api/admin/dns/records` | Create record for user |
-| `DELETE` | `/api/admin/dns/records/{id}` | Delete any record |
-
-</details>
-
-<details>
-<summary><b>Cloudflare Zones Management</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/zones` | List all zones (primary + additional) with enable/disable status |
-| `POST` | `/api/admin/zones` | Add an additional Cloudflare zone (validated against Cloudflare) |
-| `PATCH` | `/api/admin/zones/{zone_id}` | Toggle zone enabled/disabled (also for primary) |
-| `DELETE` | `/api/admin/zones/{zone_id}` | Remove an additional zone |
-
-> Disabled zones are hidden from record-creation pickers (web + Telegram) and reject new record creation.
-
-</details>
-
-<details>
-<summary><b>Telegram Bot Control</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/bot/status` | Get bot status (token masked, running, username) |
-| `PUT` | `/api/admin/bot/token` | Update bot token (auto-restart) |
-| `PUT` | `/api/admin/bot/admin-id` | Set admin chat ID |
-| `POST` | `/api/admin/bot/start` | Start (or restart) the bot |
-| `POST` | `/api/admin/bot/stop` | Stop the bot |
-
-</details>
-
-<details>
-<summary><b>SMTP & Cloudflare Token</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/smtp/status` | SMTP & verification status |
-| `PUT` | `/api/admin/smtp/config` | Update SMTP credentials |
-| `PUT` | `/api/admin/smtp/toggle-verification` | Toggle email verification on/off |
-| `GET` | `/api/admin/cf-token` | Cloudflare token info (masked) |
-| `PUT` | `/api/admin/cf-token` | Update primary Cloudflare token |
-| `POST` | `/api/admin/cf-token/test` | Live-test the Cloudflare token |
-
-</details>
-
-<details>
-<summary><b>Google OAuth & Auth Controls</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/google-oauth` | Get Google OAuth config (client_id masked) |
-| `PUT` | `/api/admin/google-oauth` | Update Google Client ID / Client Secret / enabled |
-| `GET` | `/api/admin/record-types` | List record types with enabled/disabled state |
-| `PUT` | `/api/admin/record-types` | Set which record types users can create (`{"enabled": ["A","CNAME"]}`) |
-| `GET` | `/api/admin/auth/signup-status` | Whether email signup form is enabled |
-| `PUT` | `/api/admin/auth/toggle-email-signup` | Enable / disable email-and-password signup site-wide |
-
-</details>
-
-<details>
-<summary><b>Backup</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/backup/settings` | Get backup schedule |
-| `PUT` | `/api/admin/backup/settings` | Update backup schedule |
-| `POST` | `/api/admin/backup/run` | Trigger an immediate backup |
-
-</details>
-
-<details>
-<summary><b>Plan Management</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/plans` | Plans list |
-| `POST` | `/api/admin/plans` | Create new plan |
-| `PUT` | `/api/admin/plans/{plan_id}` | Edit plan |
-| `DELETE` | `/api/admin/plans/{plan_id}` | Delete plan |
-
-</details>
-
-<details>
-<summary><b>Site Settings</b></summary>
-
-| Method | Path | Description |
-|--------|------|-------------|
-| `GET` | `/api/admin/settings` | Get settings |
-| `PUT` | `/api/admin/settings` | Update settings |
-
-</details>
-
-<br>
+---
 
 ## 📁 Project Structure
 
 ```
-├── install.sh                    # Install & management script
-├── README.md                     # English documentation
-├── README.fa.md                  # Persian documentation
+├── install.sh                     # Installer & management script (ddns-menu)
+├── README.md                      # English documentation
+├── README.fa.md                   # Persian documentation
 │
 ├── backend/
-│   ├── server.py                 # FastAPI server (all APIs + Telegram bot)
-│   ├── requirements.txt          # Python dependencies
-│   └── .env                      # Environment variables
+│   ├── server.py                  # FastAPI app: APIs, Cloudflare, backups, Telegram bot
+│   ├── requirements.txt
+│   ├── tests/                     # Auth regression tests
+│   └── .env
 │
 └── frontend/
-    ├── package.json
-    ├── tailwind.config.js
-    ├── public/
-    │   └── index.html
+    ├── package.json / tailwind.config.js / craco.config.js
+    ├── public/index.html
     └── src/
-        ├── App.js                # Main routing
-        ├── index.css             # Styles & themes
-        ├── config/
-        │   └── site.js           # Domain config (dynamic from env var)
-        ├── lib/
-        │   ├── api.js            # API client
-        │   └── i18n.js           # Translations (FA/EN)
-        ├── contexts/
-        │   ├── AuthContext.js     # Auth management
-        │   ├── ConfigContext.js   # Site config
-        │   ├── ThemeContext.js    # Theme management (dark/light)
-        │   └── LanguageContext.js # Language management
-        ├── pages/
-        │   ├── Landing.js         # Landing page (terminal aesthetic)
-        │   ├── Login.js           # Login + Google OAuth
-        │   ├── Register.js        # Registration + Google-only fallback
-        │   ├── ForgotPassword.js  # Password reset wizard (SMTP-aware)
-        │   ├── Dashboard.js       # User dashboard
-        │   └── Admin.js           # Admin panel
-        └── components/
-            ├── Navbar.js              # Navigation bar
-            ├── GoogleLoginButton.js   # Google OAuth button
-            ├── SecurePasswordInit.js  # First-login password setup (Google users)
-            └── ui/                    # Shadcn UI components
+        ├── App.js                 # Routing
+        ├── index.css              # Theme tokens, animations, RTL rules
+        ├── config/site.js         # Domain from env
+        ├── lib/api.js             # Axios client
+        ├── lib/i18n.js            # FA / EN strings
+        ├── contexts/              # Auth, Config, Theme, Language
+        ├── components/
+        │   ├── Navbar.js
+        │   ├── GoogleLoginButton.js
+        │   ├── SecurePasswordInit.js
+        │   ├── EmailVerifyPanel.js
+        │   ├── RouteLoader.js
+        │   └── ui/                # shadcn/ui components
+        └── pages/
+            ├── Landing.js         # Hero, features, pricing, FAQ, footer
+            ├── Login.js / Register.js / ForgotPassword.js
+            ├── Dashboard.js       # Records, referrals, CSV, activity
+            └── Admin.js           # 5-tab admin panel
 ```
 
-<br>
+---
 
 ## 🎯 Plan System
 
-Plans are manageable from the admin panel (create / edit / delete):
+Plans are fully managed from the admin panel. Defaults created on first run:
 
-| Plan | Records | Price | Description |
-|------|---------|-------|-------------|
-| Free | 2 | $0 | Default for all users |
-| Pro | 50 | $5/mo | Telegram contact button |
-| Enterprise | 500 | $20/mo | Telegram contact button |
+| Plan | Records | Price | Notes |
+|------|---------|-------|-------|
+| Free | 2 | $0 | Default plan for every new user |
+| Pro | 50 | $5/mo | CTA opens the admin's Telegram |
+| Enterprise | 500 | $20/mo | CTA opens the admin's Telegram |
 
-> Paid plan buttons link to admin's Telegram profile. Telegram ID is configurable from admin settings.
+- `record_limit = 0` means **unlimited**.
+- Effective limit = plan limit **+** referral bonus records.
+- Persian name / price / feature list are used automatically when the site is in Persian.
 
-<br>
+---
 
 ## 🤝 Referral System
 
 ```
-                Invite link
-  User A  ─────────────────►  User B registers
-     │                                │
-     │◄─────── +N bonus records ──────┘
-     │
-  N is configurable from admin panel
+              invite link
+   User A ───────────────────►  User B registers
+      │                                 │
+      │◄──────  +N bonus records  ───────┘
+                (N set by admin)
 ```
 
-- Each user has a **unique invite code**
+- Every user gets a unique referral code.
 - Invite link: `https://yourdomain.com/register?ref=CODE`
-- For each successful invite, the inviter gets **N bonus records**
-- N is configurable from **admin panel settings**
-
-<br>
-
-## 🛠 Local Development
-
-### Backend
-
-```bash
-cd backend
-python3 -m venv venv
-source venv/bin/activate
-pip install -r requirements.txt
-# Configure .env variables
-uvicorn server:app --host 0.0.0.0 --port 8001 --reload
-```
-
-### Frontend
-
-```bash
-cd frontend
-# Configure .env variables
-yarn install
-yarn start
-```
-
-<br>
-
-## 🔧 Troubleshooting
-
-<details>
-<summary><b>Backend won't start</b></summary>
-
-```bash
-# Check logs
-journalctl -u ddns-backend -f
-
-# Check MongoDB
-systemctl status mongod
-
-# Check .env
-cat /path/to/install/backend/.env
-```
-</details>
-
-<details>
-<summary><b>/admin path redirects to homepage</b></summary>
-
-Restart nginx or rebuild:
-```bash
-sudo ddns-menu
-# Select option 4 (Restart)
-```
-
-Cause: After SSL installation by Certbot, `try_files` in Nginx config may break.
-</details>
-
-<details>
-<summary><b>SSL won't install</b></summary>
-
-1. Make sure your domain points to the server IP:
-```bash
-dig +short yourdomain.com
-```
-
-2. Test manually:
-```bash
-sudo certbot --nginx -d yourdomain.com --non-interactive --agree-tos -m your@email.com
-```
-</details>
-
-<details>
-<summary><b>DNS record creation fails</b></summary>
-
-- Verify Cloudflare API Token has **Edit DNS** permission
-- Verify Zone ID is correct
-- Subdomain name must not be duplicate
-</details>
-
-<br>
-
-## 🔒 Security
-
-- Passwords hashed with **bcrypt**
-- Authentication with **JWT** (72-hour expiry)
-- Admin panel restricted to `admin` role only
-- CORS limited to site domain
-- Nginx security headers (X-Frame-Options, X-Content-Type-Options)
-- SSL/TLS with Let's Encrypt
-- Optional email verification for new registrations
-
-<br>
-
-## 📄 License
-
-This project is released under the [MIT](LICENSE) license.
-
-<br>
+- The inviter gains **N** extra records per successful signup (`referral_bonus_per_invite`, default `1`).
 
 ---
 
+## 🛠 Local Development
+
+**Backend**
+
+```bash
+cd backend
+python3 -m venv venv && source venv/bin/activate
+pip install -r requirements.txt
+# create .env (see Configuration)
+uvicorn server:app --host 0.0.0.0 --port 8001 --reload
+```
+
+**Frontend**
+
+```bash
+cd frontend
+yarn install
+# create .env with REACT_APP_BACKEND_URL / REACT_APP_DOMAIN_NAME
+yarn start
+```
+
+**Tests**
+
+```bash
+cd backend && pytest tests -q
+```
+
+---
+
+## 🔧 Troubleshooting
+
+```bash
+# Service status, RAM, SSL expiry, bot status
+sudo ddns-menu        # option 6
+
+# Backend logs
+sudo journalctl -u ddns-backend -n 200 -f
+
+# MongoDB
+sudo systemctl status mongod
+
+# Check env files
+cat /opt/ddns/backend/.env
+```
+
+| Symptom | Check |
+|---------|-------|
+| Site not loading | Nginx running? SSL valid? `ddns-menu` → 4 (Restart) |
+| Records not created | Cloudflare token & Zone ID (Settings → test token), zone enabled, record type enabled, plan limit |
+| Bot not responding | Token + admin ID set, bot started, only one instance (`ddns-menu` → t) |
+| Verification / reset emails missing | SMTP app password valid, verification enabled |
+| Google login missing | Client ID/secret saved, origins and redirect URI match the domain exactly |
+
+---
+
+## 🔒 Security
+
+- Passwords hashed with **bcrypt**; JWT tokens expire after 72 hours.
+- Admin routes gated by the `admin` role on every request.
+- CORS restricted to the site domain (`CORS_ORIGINS`).
+- Nginx security headers + Let's Encrypt TLS.
+- Secrets kept in `.env` files only (never committed, never exposed to the frontend).
+- Optional email verification, and an optional Google-only signup mode.
+
+---
+
+## 💬 Support & Feedback
+
+Bugs, ideas, feature requests, criticism — all welcome. Contact the developer directly on Telegram:
+
 <div align="center">
 
-If this project helped you, give it a star ⭐
+### [![Telegram](https://img.shields.io/badge/@asangozar__support-26A5E4?style=for-the-badge&logo=telegram&logoColor=white)](https://t.me/asangozar_support)
+
+**Developer:** [@asangozar_support](https://t.me/asangozar_support)
+
+</div>
+
+When reporting a bug, please include:
+
+1. What you did and what you expected.
+2. Your OS / server type and how you installed it.
+3. Relevant output of `sudo journalctl -u ddns-backend -n 100`.
+4. A screenshot, if it is a UI issue.
+
+GitHub issues: [github.com/admin6501/ddns-khalilv2/issues](https://github.com/admin6501/ddns-khalilv2/issues)
+
+---
+
+## 📄 License
+
+Released under the [MIT](LICENSE) license.
+
+<div align="center">
+
+If this project helped you, leave a star ⭐
 
 </div>
