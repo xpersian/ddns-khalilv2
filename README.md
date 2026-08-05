@@ -110,11 +110,12 @@ Five tabs (`/admin`):
 
 - Bilingual (Persian / English) with per-chat language memory.
 - **Register** and **login** inside the chat (including email verification when enabled).
-- **My records**, **add record** (type → zone → subdomain → value, fully guided), **delete record** with confirmation.
+- **My records**, **add record** (type → zone → subdomain → value → Cloudflare proxy on/off, fully guided), **delete record** with confirmation.
+- **Edit record**: change the value (IP / target) and turn the Cloudflare proxy on or off after creation.
 - **Account status**: plan, usage, referral code, invites.
 - **Referral link**, **change my password**, **logout**.
 - Respects admin record-type toggles and disabled zones automatically.
-- **Admin panel inside the bot**: stats, users (paginated), records, plans, settings editing, logs, and changing any user's password.
+- **Admin panel inside the bot**: stats, users (paginated), records, **full plan management (create / edit every field / toggle popular / delete)**, settings editing, logs, and changing any user's password.
 - Admin notifications for every new registration (web or bot).
 - Managed from the web admin panel or `ddns-menu` (token / admin ID / start / stop), with lock-file cleanup so only one bot instance runs.
 

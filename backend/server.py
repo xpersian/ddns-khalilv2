@@ -3044,6 +3044,7 @@ async def _start_telegram_bot_impl():
              InlineKeyboardButton(t(lang, "btn_delete"), callback_data="delete_list")],
             [InlineKeyboardButton(t(lang, "btn_referral"), callback_data="referral"),
              InlineKeyboardButton(t(lang, "btn_change_my_pass"), callback_data="chpass_start")],
+            [InlineKeyboardButton(_L(lang, "✏️ ویرایش رکورد", "✏️ Edit Record"), callback_data="urec|list")],
             [InlineKeyboardButton(t(lang, "btn_logout"), callback_data="logout")],
             [InlineKeyboardButton(t(lang, "btn_lang"), callback_data="toggle_lang")],
         ]
@@ -3084,15 +3085,151 @@ async def _start_telegram_bot_impl():
     _FLOW_KEYS = (
         "login_step", "login_email",
         "reg_step", "reg_name", "reg_email",
-        "add_step", "add_type", "add_name", "add_zone_id", "add_zone_domain",
+        "add_step", "add_type", "add_name", "add_zone_id", "add_zone_domain", "add_content",
         "adm_edit_step", "adm_edit_field",
         "chpass_step", "adm_chpass_step", "adm_chpass_uid",
         "verify_email", "verify_user_id",
+        "rec_edit_step", "rec_edit_id",
+        "adm_pf_step", "adm_pf_pid", "adm_pf_field",
+        "adm_plan_new_step", "adm_plan_new_id", "adm_plan_new_name",
     )
 
     def _clear_flow_state(context):
         for k in _FLOW_KEYS:
             context.user_data.pop(k, None)
+
+    # ── Cloudflare proxy support ─────────────────────────────
+    PROXYABLE_TYPES = ("A", "AAAA", "CNAME")
+
+    def _L(lang, fa, en):
+        return fa if lang == "fa" else en
+
+    def proxy_icon(proxied):
+        return "🟠" if proxied else "⚪️"
+
+    def proxy_choice_kb(lang):
+        return InlineKeyboardMarkup([
+            [InlineKeyboardButton(_L(lang, "🟠 پروکسی روشن", "🟠 Proxy On"), callback_data="addpx|1"),
+             InlineKeyboardButton(_L(lang, "⚪️ پروکسی خاموش", "⚪️ Proxy Off"), callback_data="addpx|0")],
+            [InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="main_menu")],
+        ])
+
+    async def create_record_from_flow(context, user, lang, proxied, send):
+        """Finish the add-record flow; `send(text, keyboard)` delivers the answer."""
+        record_type = context.user_data.get("add_type")
+        name = context.user_data.get("add_name")
+        content = context.user_data.get("add_content")
+        zone_id = context.user_data.get("add_zone_id")
+        zone_domain = context.user_data.get("add_zone_domain", CF_ZONE_DOMAIN)
+        if not (record_type and name and content):
+            await send(_L(lang, "❌ اطلاعات رکورد پیدا نشد. دوباره از اول تلاش کن.",
+                          "❌ Record data missing. Please start again."), back_menu_kb(lang))
+            return
+        full_name = f"{name}.{zone_domain}"
+        _clear_flow_state(context)
+
+        enabled_types = await _get_enabled_record_types()
+        if record_type not in enabled_types:
+            await send(t(lang, "add_types_disabled"), back_menu_kb(lang))
+            return
+        if record_type not in PROXYABLE_TYPES:
+            proxied = False
+        if await db.dns_records.find_one({"full_name": full_name, "record_type": record_type}):
+            await send(t(lang, "add_exists", name=full_name, type=record_type), back_menu_kb(lang))
+            return
+        if await get_zone_status(zone_id or CF_ZONE_ID) != "active":
+            await send(_L(lang, "⚠️ این دامنه در حال حاضر غیرفعال است.",
+                          "⚠️ This zone is currently disabled."), back_menu_kb(lang))
+            return
+        cf_result, used_zone = await cf_create_record(
+            name=name, record_type=record_type, content=content, proxied=proxied, zone_id=zone_id)
+        await db.dns_records.insert_one({
+            "id": str(uuid.uuid4()), "cf_record_id": cf_result["id"], "user_id": user["id"],
+            "name": name, "full_name": full_name, "record_type": record_type,
+            "content": content, "ttl": 1, "proxied": proxied,
+            "zone_id": used_zone["zone_id"],
+            "created_at": datetime.now(timezone.utc).isoformat(),
+        })
+        await db.users.update_one({"id": user["id"]}, {"$inc": {"record_count": 1}})
+        await log_activity(user["id"], user["email"], "record_created",
+                           f"{record_type} {full_name} → {content} proxy={proxied} (via Telegram)")
+        proxy_line = _L(lang, f"\n{proxy_icon(proxied)} پروکسی: {'روشن' if proxied else 'خاموش'}",
+                        f"\n{proxy_icon(proxied)} Proxy: {'On' if proxied else 'Off'}")
+        kb = InlineKeyboardMarkup([
+            [InlineKeyboardButton(t(lang, "btn_view_records"), callback_data="records"),
+             InlineKeyboardButton(t(lang, "btn_add_another"), callback_data="add_start")],
+            [InlineKeyboardButton(t(lang, "btn_back"), callback_data="main_menu")],
+        ])
+        await send(t(lang, "add_success", type=record_type, name=full_name, value=content) + proxy_line, kb)
+
+    def record_detail_view(lang, record):
+        """Detail text + edit keyboard for one DNS record."""
+        proxied = bool(record.get("proxied"))
+        text = (
+            _L(lang, "✏️ <b>ویرایش رکورد</b>\n\n", "✏️ <b>Edit Record</b>\n\n")
+            + f"<code>{record['record_type']}</code> │ {record['full_name']}\n"
+            + _L(lang, f"مقدار: <code>{record['content']}</code>\n", f"Value: <code>{record['content']}</code>\n")
+            + _L(lang, f"پروکسی: {proxy_icon(proxied)} {'روشن' if proxied else 'خاموش'}",
+                 f"Proxy: {proxy_icon(proxied)} {'On' if proxied else 'Off'}")
+        )
+        rows = [[InlineKeyboardButton(_L(lang, "📝 تغییر مقدار", "📝 Change Value"),
+                                      callback_data=f"urec|ct|{record['id']}")]]
+        if record["record_type"] in PROXYABLE_TYPES:
+            label = _L(lang, "⚪️ خاموش کردن پروکسی", "⚪️ Turn Proxy Off") if proxied else \
+                    _L(lang, "🟠 روشن کردن پروکسی", "🟠 Turn Proxy On")
+            rows.append([InlineKeyboardButton(label, callback_data=f"urec|px|{record['id']}")])
+        rows.append([InlineKeyboardButton("🔙", callback_data="urec|list"),
+                     InlineKeyboardButton(t(lang, "btn_back"), callback_data="main_menu")])
+        return text, InlineKeyboardMarkup(rows)
+
+    # ── Admin plan management helpers ────────────────────────
+    PLAN_FIELDS = (
+        ("name", "📋 Name (EN)"),
+        ("name_fa", "📋 Name (FA)"),
+        ("price", "💵 Price (EN)"),
+        ("price_fa", "💵 Price (FA)"),
+        ("record_limit", "🔢 Record Limit"),
+        ("features", "✨ Features (EN)"),
+        ("features_fa", "✨ Features (FA)"),
+        ("sort_order", "↕️ Sort Order"),
+    )
+
+    def plan_detail_view(lang, plan):
+        popular = "⭐" if plan.get("popular") else "—"
+        text = (
+            _L(lang, "📋 <b>مدیریت پلن</b>\n\n", "📋 <b>Manage Plan</b>\n\n")
+            + f"<code>{plan['plan_id']}</code>\n"
+            + f"EN: {plan.get('name', '-')} │ {plan.get('price', '-')}\n"
+            + f"FA: {plan.get('name_fa', '-')} │ {plan.get('price_fa', '-')}\n"
+            + _L(lang, f"سقف رکورد: {_fmt_limit(plan.get('record_limit', 0), lang)}\n",
+                 f"Record limit: {_fmt_limit(plan.get('record_limit', 0), lang)}\n")
+            + _L(lang, f"محبوب: {popular} │ ترتیب: {plan.get('sort_order', 0)}\n",
+                 f"Popular: {popular} │ Order: {plan.get('sort_order', 0)}\n")
+            + _L(lang, f"امکانات EN: {len(plan.get('features') or [])} │ FA: {len(plan.get('features_fa') or [])}",
+                 f"Features EN: {len(plan.get('features') or [])} │ FA: {len(plan.get('features_fa') or [])}")
+        )
+        pid = plan["plan_id"]
+        rows, row = [], []
+        for fid, flabel in PLAN_FIELDS:
+            row.append(InlineKeyboardButton(flabel, callback_data=f"admp|f|{pid}|{fid}"))
+            if len(row) == 2:
+                rows.append(row)
+                row = []
+        if row:
+            rows.append(row)
+        rows.append([InlineKeyboardButton(_L(lang, "⭐ تغییر محبوب", "⭐ Toggle Popular"), callback_data=f"admp|pop|{pid}"),
+                     InlineKeyboardButton(_L(lang, "🗑 حذف پلن", "🗑 Delete Plan"), callback_data=f"admp|del|{pid}")])
+        rows.append([InlineKeyboardButton("🔙", callback_data="adm_plans")])
+        return text, InlineKeyboardMarkup(rows)
+
+    def _parse_plan_value(field, raw):
+        """Convert a text answer into the stored plan field value."""
+        if field in ("record_limit", "sort_order"):
+            return int(raw)
+        if field in ("features", "features_fa"):
+            parts = [p.strip() for p in raw.replace(",", "\n").split("\n")]
+            return [p for p in parts if p]
+        return raw.strip()
 
     # ── /start ───────────────────────────────────────────────
     async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3278,6 +3415,7 @@ async def _start_telegram_bot_impl():
             kb = InlineKeyboardMarkup([
                 [InlineKeyboardButton(t(lang, "btn_add"), callback_data="add_start"),
                  InlineKeyboardButton(t(lang, "btn_delete"), callback_data="delete_list")],
+                [InlineKeyboardButton(_L(lang, "✏️ ویرایش رکورد", "✏️ Edit Record"), callback_data="urec|list")],
                 [InlineKeyboardButton(t(lang, "btn_refresh"), callback_data="records"),
                  InlineKeyboardButton(t(lang, "btn_back"), callback_data="main_menu")]
             ])
@@ -3456,6 +3594,98 @@ async def _start_telegram_bot_impl():
             except Exception as e:
                 logger.error(f"User record delete error: {e}", exc_info=True)
                 await query.edit_message_text(t(lang, "error", err=_get_error_msg(e)), reply_markup=back_menu_kb(lang))
+
+        # ── Add Record: proxy choice ──
+        elif data.startswith("addpx|"):
+            if not user:
+                await send_not_logged_in(query, lang, chat_id)
+                return
+            proxied = data.endswith("|1")
+
+            async def _send_edit(txt, kb):
+                await query.edit_message_text(txt, reply_markup=kb, parse_mode="HTML")
+
+            try:
+                await create_record_from_flow(context, user, lang, proxied, _send_edit)
+            except Exception as e:
+                logger.error(f"Bot create record error: {e}", exc_info=True)
+                await query.edit_message_text(t(lang, "error", err=_get_error_msg(e)), reply_markup=back_menu_kb(lang))
+
+        # ── Edit Record: list ──
+        elif data == "urec|list":
+            if not user:
+                await send_not_logged_in(query, lang, chat_id)
+                return
+            records = await db.dns_records.find({"user_id": user["id"]}, {"_id": 0}).to_list(100)
+            if not records:
+                await query.edit_message_text(t(lang, "no_records"), reply_markup=back_menu_kb(lang))
+                return
+            buttons = [[InlineKeyboardButton(
+                f"{proxy_icon(r.get('proxied'))} {r['record_type']} | {r['full_name']}",
+                callback_data=f"urec|v|{r['id']}")] for r in records]
+            buttons.append([InlineKeyboardButton(t(lang, "btn_back"), callback_data="main_menu")])
+            await query.edit_message_text(
+                _L(lang, "✏️ <b>کدام رکورد را ویرایش می‌کنی؟</b>", "✏️ <b>Which record do you want to edit?</b>"),
+                reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
+
+        elif data.startswith("urec|v|"):
+            if not user:
+                await send_not_logged_in(query, lang, chat_id)
+                return
+            record = await db.dns_records.find_one({"id": data[7:], "user_id": user["id"]}, {"_id": 0})
+            if not record:
+                await query.edit_message_text(t(lang, "delete_not_found"), reply_markup=back_menu_kb(lang))
+                return
+            text, kb = record_detail_view(lang, record)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+
+        # ── Edit Record: toggle Cloudflare proxy ──
+        elif data.startswith("urec|px|"):
+            if not user:
+                await send_not_logged_in(query, lang, chat_id)
+                return
+            try:
+                record = await db.dns_records.find_one({"id": data[8:], "user_id": user["id"]}, {"_id": 0})
+                if not record:
+                    await query.edit_message_text(t(lang, "delete_not_found"), reply_markup=back_menu_kb(lang))
+                    return
+                if record["record_type"] not in PROXYABLE_TYPES:
+                    await query.edit_message_text(
+                        _L(lang, "❌ این نوع رکورد پروکسی نمی‌پذیرد.", "❌ This record type cannot be proxied."),
+                        reply_markup=back_menu_kb(lang))
+                    return
+                new_proxied = not bool(record.get("proxied"))
+                await cf_update_record(
+                    cf_record_id=record["cf_record_id"], record_type=record["record_type"],
+                    name=record["full_name"], content=record["content"], ttl=record.get("ttl", 1),
+                    proxied=new_proxied, zone_id=record.get("zone_id"))
+                await db.dns_records.update_one({"id": record["id"]}, {"$set": {"proxied": new_proxied}})
+                await log_activity(user["id"], user["email"], "record_updated",
+                                   f"{record['record_type']} {record['full_name']} proxy={new_proxied} (via Telegram)")
+                record["proxied"] = new_proxied
+                text, kb = record_detail_view(lang, record)
+                await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Bot proxy toggle error: {e}", exc_info=True)
+                await query.edit_message_text(t(lang, "error", err=_get_error_msg(e)), reply_markup=back_menu_kb(lang))
+
+        # ── Edit Record: ask for a new value ──
+        elif data.startswith("urec|ct|"):
+            if not user:
+                await send_not_logged_in(query, lang, chat_id)
+                return
+            rid = data[8:]
+            record = await db.dns_records.find_one({"id": rid, "user_id": user["id"]}, {"_id": 0})
+            if not record:
+                await query.edit_message_text(t(lang, "delete_not_found"), reply_markup=back_menu_kb(lang))
+                return
+            context.user_data["rec_edit_id"] = rid
+            context.user_data["rec_edit_step"] = "content"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_cancel"), callback_data=f"urec|v|{rid}")]])
+            await query.edit_message_text(
+                _L(lang, f"📝 مقدار جدید {record['record_type']} برای <code>{record['full_name']}</code> را بفرست:\n\nمقدار فعلی: <code>{record['content']}</code>",
+                   f"📝 Send the new {record['record_type']} value for <code>{record['full_name']}</code>:\n\nCurrent: <code>{record['content']}</code>"),
+                reply_markup=kb, parse_mode="HTML")
 
         # ── Logout ──
         elif data == "logout":
@@ -3819,13 +4049,108 @@ async def _start_telegram_bot_impl():
                     await query.edit_message_text("📭 No plans", reply_markup=admin_back_kb(lang))
                     return
                 text = t(lang, "admin_plans_title")
+                buttons = []
                 for p in plans_list:
                     pop = " ⭐" if p.get("popular") else ""
                     text += t(lang, "admin_plan_line", name=p['name'], id=p['plan_id'], price=p.get('price', '-'), limit=_fmt_limit(p['record_limit'], lang)) + pop
-                await query.edit_message_text(text, reply_markup=admin_back_kb(lang), parse_mode="HTML")
+                    buttons.append([InlineKeyboardButton(f"✏️ {p['name']} ({p['plan_id']})", callback_data=f"admp|v|{p['plan_id']}")])
+                buttons.append([InlineKeyboardButton(_L(lang, "➕ پلن جدید", "➕ New Plan"), callback_data="admp|new")])
+                buttons.append([InlineKeyboardButton("🔙", callback_data="adm_panel")])
+                await query.edit_message_text(text, reply_markup=InlineKeyboardMarkup(buttons), parse_mode="HTML")
             except Exception as e:
                 logger.error(f"Admin plans error: {e}", exc_info=True)
                 await query.edit_message_text(t(lang, "error", err=_get_error_msg(e)), reply_markup=admin_back_kb(lang))
+
+        # ── Admin Plans: manage one plan ──
+        elif data.startswith("admp|v|"):
+            if not is_admin_user(user, chat_id):
+                return
+            plan = await db.plans.find_one({"plan_id": data[7:]}, {"_id": 0})
+            if not plan:
+                await query.edit_message_text("❌ Plan not found", reply_markup=admin_back_kb(lang))
+                return
+            text, kb = plan_detail_view(lang, plan)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+
+        elif data.startswith("admp|f|"):
+            if not is_admin_user(user, chat_id):
+                return
+            pid, field = data[7:].split("|", 1)
+            plan = await db.plans.find_one({"plan_id": pid}, {"_id": 0})
+            if not plan:
+                await query.edit_message_text("❌ Plan not found", reply_markup=admin_back_kb(lang))
+                return
+            context.user_data["adm_pf_pid"] = pid
+            context.user_data["adm_pf_field"] = field
+            context.user_data["adm_pf_step"] = "value"
+            current = plan.get(field, "")
+            if isinstance(current, list):
+                current = "\n".join(current)
+            hint = ""
+            if field in ("features", "features_fa"):
+                hint = _L(lang, "\n\n(هر امکان در یک خط)", "\n\n(one feature per line)")
+            elif field == "record_limit":
+                hint = _L(lang, "\n\n(۰ = نامحدود)", "\n\n(0 = unlimited)")
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_cancel"), callback_data=f"admp|v|{pid}")]])
+            await query.edit_message_text(
+                _L(lang, f"✏️ مقدار جدید <b>{field}</b> را بفرست:\n\nفعلی:\n<code>{_html_escape(str(current))}</code>{hint}",
+                   f"✏️ Send the new value for <b>{field}</b>:\n\nCurrent:\n<code>{_html_escape(str(current))}</code>{hint}"),
+                reply_markup=kb, parse_mode="HTML")
+
+        elif data.startswith("admp|pop|"):
+            if not is_admin_user(user, chat_id):
+                return
+            pid = data[9:]
+            plan = await db.plans.find_one({"plan_id": pid}, {"_id": 0})
+            if not plan:
+                await query.edit_message_text("❌ Plan not found", reply_markup=admin_back_kb(lang))
+                return
+            new_popular = not bool(plan.get("popular"))
+            await db.plans.update_one({"plan_id": pid}, {"$set": {"popular": new_popular}})
+            plan["popular"] = new_popular
+            text, kb = plan_detail_view(lang, plan)
+            await query.edit_message_text(text, reply_markup=kb, parse_mode="HTML")
+
+        elif data.startswith("admp|del|"):
+            if not is_admin_user(user, chat_id):
+                return
+            pid = data[9:]
+            kb = InlineKeyboardMarkup([
+                [InlineKeyboardButton("✅", callback_data=f"admp|dely|{pid}"),
+                 InlineKeyboardButton(t(lang, "btn_cancel"), callback_data=f"admp|v|{pid}")]
+            ])
+            await query.edit_message_text(
+                _L(lang, f"⚠️ پلن <code>{pid}</code> حذف شود؟", f"⚠️ Delete plan <code>{pid}</code>?"),
+                reply_markup=kb, parse_mode="HTML")
+
+        elif data.startswith("admp|dely|"):
+            if not is_admin_user(user, chat_id):
+                return
+            pid = data[10:]
+            users_on_plan = await db.users.count_documents({"plan": pid})
+            if users_on_plan > 0:
+                await query.edit_message_text(
+                    _L(lang, f"❌ {users_on_plan} کاربر روی این پلن هستند؛ اول پلنشان را عوض کن.",
+                       f"❌ {users_on_plan} users are on this plan; move them first."),
+                    reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="adm_plans")]]))
+                return
+            await db.plans.delete_one({"plan_id": pid})
+            PLAN_LIMITS.pop(pid, None)
+            await log_activity("admin", "admin", "plan_deleted", f"{pid} (via Telegram)")
+            await query.edit_message_text(
+                _L(lang, f"✅ پلن <code>{pid}</code> حذف شد.", f"✅ Plan <code>{pid}</code> deleted."),
+                reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙", callback_data="adm_plans")]]),
+                parse_mode="HTML")
+
+        elif data == "admp|new":
+            if not is_admin_user(user, chat_id):
+                return
+            context.user_data["adm_plan_new_step"] = "plan_id"
+            kb = InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="adm_plans")]])
+            await query.edit_message_text(
+                _L(lang, "➕ <b>پلن جدید</b>\n\nشناسه‌ی پلن را بفرست (انگلیسی و بدون فاصله، مثل <code>gold</code>):",
+                   "➕ <b>New Plan</b>\n\nSend the plan id (lowercase, no spaces, e.g. <code>gold</code>):"),
+                reply_markup=kb, parse_mode="HTML")
 
         # ── Admin Settings ──
         elif data == "adm_settings":
@@ -4218,6 +4543,130 @@ async def _start_telegram_bot_impl():
                     await update.message.reply_text(t(lang, "error", err=_get_error_msg(e)), reply_markup=admin_back_kb(lang))
                 return
 
+        # ── Edit Record Value Flow ──
+        if context.user_data.get("rec_edit_step") == "content":
+            cur_user = await get_user_by_chat(chat_id)
+            rid = context.user_data.get("rec_edit_id")
+            context.user_data.pop("rec_edit_step", None)
+            context.user_data.pop("rec_edit_id", None)
+            if not cur_user or not rid:
+                return
+            try:
+                record = await db.dns_records.find_one({"id": rid, "user_id": cur_user["id"]}, {"_id": 0})
+                if not record:
+                    await update.message.reply_text(t(lang, "delete_not_found"), reply_markup=back_menu_kb(lang))
+                    return
+                new_content = text.strip()
+                if not new_content:
+                    await update.message.reply_text(t(lang, "add_name_invalid"), reply_markup=back_menu_kb(lang))
+                    return
+                await cf_update_record(
+                    cf_record_id=record["cf_record_id"], record_type=record["record_type"],
+                    name=record["full_name"], content=new_content, ttl=record.get("ttl", 1),
+                    proxied=bool(record.get("proxied")), zone_id=record.get("zone_id"))
+                await db.dns_records.update_one({"id": rid}, {"$set": {"content": new_content}})
+                await log_activity(cur_user["id"], cur_user["email"], "record_updated",
+                                  f"{record['record_type']} {record['full_name']} → {new_content} (via Telegram)")
+                kb = InlineKeyboardMarkup([
+                    [InlineKeyboardButton(_L(lang, "✏️ ویرایش بیشتر", "✏️ Edit More"), callback_data=f"urec|v|{rid}")],
+                    [InlineKeyboardButton(t(lang, "btn_view_records"), callback_data="records"),
+                     InlineKeyboardButton(t(lang, "btn_back"), callback_data="main_menu")],
+                ])
+                await update.message.reply_text(
+                    _L(lang, f"✅ رکورد به‌روزرسانی شد!\n\n<code>{record['record_type']}</code> │ {record['full_name']} → <code>{new_content}</code>",
+                       f"✅ Record updated!\n\n<code>{record['record_type']}</code> │ {record['full_name']} → <code>{new_content}</code>"),
+                    reply_markup=kb, parse_mode="HTML")
+            except Exception as e:
+                logger.error(f"Bot record value edit error: {e}", exc_info=True)
+                await update.message.reply_text(t(lang, "error", err=_get_error_msg(e)), reply_markup=back_menu_kb(lang))
+            return
+
+        # ── Admin Plan Field Edit Flow ──
+        if context.user_data.get("adm_pf_step") == "value":
+            adm_user = await get_user_by_chat(chat_id)
+            pid = context.user_data.get("adm_pf_pid")
+            field = context.user_data.get("adm_pf_field")
+            if not is_admin_user(adm_user, chat_id) or not pid or not field:
+                context.user_data.pop("adm_pf_step", None)
+                return
+            context.user_data.pop("adm_pf_step", None)
+            context.user_data.pop("adm_pf_pid", None)
+            context.user_data.pop("adm_pf_field", None)
+            try:
+                value = _parse_plan_value(field, text)
+            except ValueError:
+                await update.message.reply_text("❌ Must be a number", reply_markup=admin_back_kb(lang))
+                return
+            await db.plans.update_one({"plan_id": pid}, {"$set": {field: value}})
+            if field == "record_limit":
+                PLAN_LIMITS[pid] = value
+            await log_activity("admin", "admin", "plan_updated", f"{pid}.{field} (via Telegram)")
+            plan = await db.plans.find_one({"plan_id": pid}, {"_id": 0})
+            detail, kb = plan_detail_view(lang, plan)
+            await update.message.reply_text(
+                _L(lang, f"✅ <b>{field}</b> ذخیره شد.\n\n", f"✅ <b>{field}</b> saved.\n\n") + detail,
+                reply_markup=kb, parse_mode="HTML")
+            return
+
+        # ── Admin New Plan Flow ──
+        plan_new_step = context.user_data.get("adm_plan_new_step")
+        if plan_new_step:
+            adm_user = await get_user_by_chat(chat_id)
+            if not is_admin_user(adm_user, chat_id):
+                context.user_data.pop("adm_plan_new_step", None)
+                return
+            cancel_kb = InlineKeyboardMarkup([[InlineKeyboardButton(t(lang, "btn_cancel"), callback_data="adm_plans")]])
+            if plan_new_step == "plan_id":
+                pid = text.strip().lower().replace(" ", "_")
+                if not pid or not _re.fullmatch(r"[a-z0-9_-]{2,30}", pid):
+                    await update.message.reply_text(
+                        _L(lang, "❌ شناسه نامعتبر. فقط حروف انگلیسی کوچک، عدد، - و _", 
+                           "❌ Invalid id. Use lowercase letters, digits, - and _ only."), reply_markup=cancel_kb)
+                    return
+                if await db.plans.find_one({"plan_id": pid}):
+                    await update.message.reply_text(
+                        _L(lang, f"❌ پلن <code>{pid}</code> از قبل وجود دارد.", f"❌ Plan <code>{pid}</code> already exists."),
+                        reply_markup=cancel_kb, parse_mode="HTML")
+                    return
+                context.user_data["adm_plan_new_id"] = pid
+                context.user_data["adm_plan_new_step"] = "name"
+                await update.message.reply_text(
+                    _L(lang, "📋 نام پلن را بفرست:", "📋 Send the plan name:"), reply_markup=cancel_kb)
+                return
+            if plan_new_step == "name":
+                context.user_data["adm_plan_new_name"] = text.strip()
+                context.user_data["adm_plan_new_step"] = "limit"
+                await update.message.reply_text(
+                    _L(lang, "🔢 سقف رکورد را بفرست (۰ = نامحدود):", "🔢 Send the record limit (0 = unlimited):"),
+                    reply_markup=cancel_kb)
+                return
+            if plan_new_step == "limit":
+                try:
+                    limit = int(text.strip())
+                except ValueError:
+                    await update.message.reply_text("❌ Must be a number", reply_markup=cancel_kb)
+                    return
+                pid = context.user_data.get("adm_plan_new_id")
+                name = context.user_data.get("adm_plan_new_name", pid)
+                context.user_data.pop("adm_plan_new_step", None)
+                context.user_data.pop("adm_plan_new_id", None)
+                context.user_data.pop("adm_plan_new_name", None)
+                count = await db.plans.count_documents({})
+                plan_doc = {
+                    "plan_id": pid, "name": name, "name_fa": name,
+                    "price": "-", "price_fa": "-", "record_limit": max(0, limit),
+                    "features": [], "features_fa": [], "popular": False, "sort_order": count,
+                }
+                await db.plans.insert_one(dict(plan_doc))
+                PLAN_LIMITS[pid] = plan_doc["record_limit"]
+                await log_activity("admin", "admin", "plan_created", f"{pid} (via Telegram)")
+                detail, kb = plan_detail_view(lang, plan_doc)
+                await update.message.reply_text(
+                    _L(lang, "✅ پلن ساخته شد. حالا بقیه‌ی فیلدها را ویرایش کن:\n\n",
+                       "✅ Plan created. Now edit the remaining fields:\n\n") + detail,
+                    reply_markup=kb, parse_mode="HTML")
+                return
+
         # ── Add Record Flow ──
         if not context.user_data.get("add_step"):
             return
@@ -4256,57 +4705,32 @@ async def _start_telegram_bot_impl():
             record_type = context.user_data["add_type"]
             enabled_types = await _get_enabled_record_types()
             if record_type not in enabled_types:
-                saved_lang = context.user_data.get("lang", lang)
-                context.user_data.clear()
-                context.user_data["lang"] = saved_lang
+                _clear_flow_state(context)
                 await update.message.reply_text(t(lang, "add_types_disabled"), reply_markup=back_menu_kb(lang))
                 return
-            name = context.user_data["add_name"]
-            zone_id = context.user_data.get("add_zone_id")
-            zone_domain = context.user_data.get("add_zone_domain", CF_ZONE_DOMAIN)
-            full_name = f"{name}.{zone_domain}"
-            # Clear flow data but preserve language
-            saved_lang = context.user_data.get("lang", lang)
-            context.user_data.clear()
-            context.user_data["lang"] = saved_lang
+            context.user_data["add_content"] = content
 
-            existing = await db.dns_records.find_one({"full_name": full_name, "record_type": record_type})
-            if existing:
+            async def _send_reply(txt, kb):
+                await update.message.reply_text(txt, reply_markup=kb, parse_mode="HTML")
+
+            if record_type in PROXYABLE_TYPES:
+                context.user_data["add_step"] = "proxy"
                 await update.message.reply_text(
-                    t(lang, "add_exists", name=full_name, type=record_type),
-                    reply_markup=back_menu_kb(lang), parse_mode="HTML"
-                )
+                    _L(lang, f"🛡 پروکسی کلادفلر برای <code>{content}</code> روشن باشه؟\n\nروشن = مخفی شدن IP + CDN و محافظت DDoS",
+                       f"🛡 Enable Cloudflare proxy for <code>{content}</code>?\n\nOn = hidden IP + CDN and DDoS protection"),
+                    reply_markup=proxy_choice_kb(lang), parse_mode="HTML")
                 return
             try:
-                # Block creation if the selected zone is disabled
-                zone_status = await get_zone_status(zone_id or CF_ZONE_ID)
-                if zone_status != "active":
-                    disabled_msg = "⚠️ این دامنه در حال حاضر غیرفعال است." if lang == "fa" else "⚠️ This zone is currently disabled."
-                    await update.message.reply_text(disabled_msg, reply_markup=back_menu_kb(lang))
-                    return
-                cf_result, used_zone = await cf_create_record(name=name, record_type=record_type, content=content, proxied=False, zone_id=zone_id)
-                record_id = str(uuid.uuid4())
-                record_doc = {
-                    "id": record_id, "cf_record_id": cf_result["id"], "user_id": user["id"],
-                    "name": name, "full_name": full_name, "record_type": record_type,
-                    "content": content, "ttl": 1, "proxied": False,
-                    "zone_id": used_zone["zone_id"],
-                    "created_at": datetime.now(timezone.utc).isoformat()
-                }
-                await db.dns_records.insert_one(record_doc)
-                await db.users.update_one({"id": user["id"]}, {"$inc": {"record_count": 1}})
-                await log_activity(user["id"], user["email"], "record_created", f"{record_type} {full_name} → {content} (via Telegram)")
-                kb = InlineKeyboardMarkup([
-                    [InlineKeyboardButton(t(lang, "btn_view_records"), callback_data="records"),
-                     InlineKeyboardButton(t(lang, "btn_add_another"), callback_data="add_start")],
-                    [InlineKeyboardButton(t(lang, "btn_back"), callback_data="main_menu")]
-                ])
-                await update.message.reply_text(
-                    t(lang, "add_success", type=record_type, name=full_name, value=content),
-                    reply_markup=kb, parse_mode="HTML"
-                )
+                await create_record_from_flow(context, user, lang, False, _send_reply)
             except Exception as e:
+                logger.error(f"Bot create record error: {e}", exc_info=True)
                 await update.message.reply_text(t(lang, "error", err=_get_error_msg(e)), reply_markup=back_menu_kb(lang))
+
+        elif step == "proxy":
+            await update.message.reply_text(
+                _L(lang, "👆 لطفاً یکی از دکمه‌های بالا را بزن (روشن یا خاموش).",
+                   "👆 Please tap one of the buttons above (On or Off)."),
+                reply_markup=proxy_choice_kb(lang))
 
     # ── Global Error Handler ────────────────────────────────
     async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE):
